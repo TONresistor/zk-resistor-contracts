@@ -1,0 +1,172 @@
+import "@acton/emulation/network"
+import "@acton/emulation/testing"
+import "@acton/testing/expect"
+import "@contracts/pool-types"
+import "@tests/proofs-fixture"
+import "@wrappers/Pool.gen"
+
+// ============================================================================
+// REAL PROOF VALIDATION: executes the on-chain BLS12-381 pairing check
+// against a Groth16 proof generated off-chain by snarkjs.
+//
+// If both `test insert proof verifies on-chain` and `test withdraw proof
+// verifies on-chain` pass, then the entire pipeline is validated:
+//   circuit (circom) → setup (snarkjs) → witness (JS) → proof (snarkjs)
+//                   → BLST encoding → Tolk slice → TVM pairing check
+//
+// Fixture circuits are depth-4 variants of the production templates in
+// `circuits/insert.circom` and `circuits/withdraw.circom` (same constraint
+// structure, smaller tree for cheaper test compilation). A passing fixture
+// is strong evidence the production depth-20 pipeline works under the same
+// proving stack. To regenerate, see `circuits/scripts/gen-fixtures.js`.
+// ============================================================================
+
+fun freshPool(): Pool {
+    val identity: PoolIdentity = {
+        jettonMaster: testing.treasury("jm").address,
+        factory: testing.treasury("factory").address,
+        denomination: 100,
+    };
+    val merkle: MerkleState = {
+        nextIndex: 0,
+        currentRoot: 0,
+        rootHistory: [],
+        nullifiers: [],
+        commitments: [],
+    };
+    return Pool.fromStorage({
+        identity: identity.toCell(),
+        jettonWallet: testing.treasury("jw").address,
+        relayerReserve: 0,
+        merkle: merkle.toCell(),
+    });
+}
+
+fun setupPool(): Pool {
+    val deployer = testing.treasury("deployer");
+    val pool = freshPool();
+    val res = pool.deploy(deployer.address, { value: ton("1") });
+    expect(res).toHaveSuccessfulDeploy({ to: pool.address });
+    return pool;
+}
+
+get fun `test insert proof verifies on-chain via BLS pairing`() {
+    val pool = setupPool();
+    val ok = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        fixtureInsertProofC(),
+    );
+    expect(ok).toEqual(true);
+}
+
+get fun `test insert proof rejected when commitment tampered`() {
+    val pool = setupPool();
+    val tampered: uint256 = FIXTURE_INSERT_COMMITMENT + 1;
+    val ok = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        tampered,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        fixtureInsertProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test withdraw proof verifies on-chain via BLS pairing`() {
+    val pool = setupPool();
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    expect(ok).toEqual(true);
+}
+
+get fun `test withdraw proof rejected when nullifier tampered`() {
+    val pool = setupPool();
+    val tampered: uint256 = FIXTURE_WITHDRAW_NULLIFIER_HASH + 1;
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        tampered,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test withdraw proof rejected when recipient field tampered`() {
+    val pool = setupPool();
+    val tampered: uint256 = FIXTURE_WITHDRAW_RECIPIENT + 1;
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        tampered, // proof must reject when recipient changes
+        fixtureWithdrawProofA(),
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+// ============================================================================
+// Slice-shape gate: malformed proof slices return false, never crash
+// ============================================================================
+//
+// Strict length validation in the verifier ensures over-length proofs (which
+// TVM would silently truncate to 48/96 bytes) and under-length proofs (which
+// would trigger cell_underflow during pairing) are both rejected cleanly.
+
+fun underLengthG1(): slice {
+    return beginCell().storeUint(0, 200).endCell().beginParse();
+}
+
+fun overLengthG2(): slice {
+    // 800 bits total (expected 768). storeUint caps at 256 bits per call,
+    // so chain four stores: 256 + 256 + 256 + 32 = 800.
+    return beginCell()
+        .storeUint(0, 256)
+        .storeUint(0, 256)
+        .storeUint(0, 256)
+        .storeUint(0, 32)
+        .endCell()
+        .beginParse();
+}
+
+get fun `test insert proof rejected when proofA is under-length`() {
+    val pool = setupPool();
+    val ok = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        underLengthG1(), // 200 bits, expected 384
+        fixtureInsertProofB(),
+        fixtureInsertProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test withdraw proof rejected when proofB is over-length`() {
+    val pool = setupPool();
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        overLengthG2(), // 800 bits, expected 768
+        fixtureWithdrawProofC(),
+    );
+    expect(ok).toEqual(false);
+}

@@ -1,0 +1,36 @@
+[package]
+name = "zkresistor"
+description = "ZKResistor: trustless ZK mixer for TON (multi-jetton, multi-denomination, no admin)"
+version = "2.0.0"
+license = "MIT"
+
+[toolchain]
+acton = "1.0.0"
+
+[contracts.Pool]
+display-name = "MixerPool"
+src = "contracts/pool.tolk"
+depends = []
+
+[contracts.TonPool]
+display-name = "MixerTonPool"
+src = "contracts/ton-pool.tolk"
+depends = []
+
+[contracts.Factory]
+display-name = "MixerFactory"
+src = "contracts/factory.tolk"
+depends = ["Pool", "TonPool"]
+
+[test]
+
+[fmt]
+width = 100
+ignore = []
+
+[import-mappings]
+acton = ".acton"
+contracts = "contracts"
+gen = "gen"
+tests = "tests"
+wrappers = "wrappers"

@@ -1,0 +1,44 @@
+{
+  "name": "zkresistor-circuits",
+  "version": "2.0.0",
+  "description": "ZK circuits for ZKResistor: Poseidon BLS12-381 over a Merkle tree of depth 20.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "precompile": "mkdir -p build",
+    "compile:insert": "circom insert.circom --r1cs --wasm --sym -o build/ -p bls12381 -l node_modules",
+    "compile:withdraw": "circom withdraw.circom --r1cs --wasm --sym -o build/ -p bls12381 -l node_modules",
+    "compile:hasher": "circom hasher.circom --r1cs --wasm --sym -o build/ -p bls12381 -l node_modules",
+    "compile": "npm run compile:insert && npm run compile:withdraw && npm run compile:hasher",
+    "check:constraints": "node scripts/check-constraints.js",
+    "check:toolchain": "node scripts/check-toolchain.js",
+    "check:zeros": "node scripts/check-zeros.js",
+    "setup:ptau": "echo 'Download Hermez Powers of Tau from https://github.com/iden3/snarkjs#7-prepare-phase-2 (powersOfTau28_hez_final_21.ptau, ~290 MB for depth-20 circuits).'",
+    "setup:insert": "snarkjs groth16 setup build/insert.r1cs build/powersOfTau28_hez_final_21.ptau build/insert_0000.zkey",
+    "setup:withdraw": "snarkjs groth16 setup build/withdraw.r1cs build/powersOfTau28_hez_final_21.ptau build/withdraw_0000.zkey",
+    "export:vk:insert": "snarkjs zkey export verificationkey build/insert_final.zkey build/insert_vk.json",
+    "export:vk:withdraw": "snarkjs zkey export verificationkey build/withdraw_final.zkey build/withdraw_vk.json",
+    "vk-to-tolk:insert": "node scripts/vk-to-tolk.js build/insert_vk.json INSERT > ../contracts/verifier-insert-vk.tolk",
+    "vk-to-tolk:withdraw": "node scripts/vk-to-tolk.js build/withdraw_vk.json WITHDRAW > ../contracts/verifier-withdraw-vk.tolk"
+  },
+  "dependencies": {
+    "@noble/curves": "2.2.0",
+    "circomlib": "2.0.5",
+    "poseidon-bls12381-circom": "1.0.0",
+    "snarkjs": "0.7.6"
+  },
+  "devDependencies": {
+    "circom_tester": "0.0.20"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "config": {
+    "circom_version": "2.2.3",
+    "constraint_baseline": {
+      "insert": 25105,
+      "withdraw": 14537,
+      "hasher": 624
+    }
+  }
+}

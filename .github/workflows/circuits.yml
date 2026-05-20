@@ -1,0 +1,73 @@
+name: Circuits
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "circuits/**"
+      - ".github/workflows/circuits.yml"
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - "circuits/**"
+      - ".github/workflows/circuits.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  compile-and-check:
+    name: Compile + constraint baseline + toolchain pin
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: circuits
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: circuits/package-lock.json
+
+      - name: Install Rust (for circom)
+        uses: dtolnay/rust-toolchain@1ff72ee08e3cb84d84adba594e0a297990fc1ed3 # stable
+        with:
+          toolchain: stable
+
+      - name: Install circom 2.2.3
+        run: |
+          cargo install --git https://github.com/iden3/circom.git --tag v2.2.3 --locked circom
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Toolchain version pin
+        run: npm run check:toolchain
+
+      - name: Compile circuits
+        run: npm run compile
+
+      - name: Canonical ZEROS[] integrity (EMPTY_TREE_ROOT gate)
+        run: npm run check:zeros
+
+      - name: Constraint count baseline
+        run: npm run check:constraints
