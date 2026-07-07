@@ -177,6 +177,27 @@ fun refundDeposit(
     event.send(SEND_MODE_IGNORE_ERRORS);
 }
 
+fun isWellFormedZkProofCell(proofCell: cell): bool {
+    val proofSlice = proofCell.beginParse();
+    return proofSlice.remainingBitsCount() == 0 && proofSlice.remainingRefsCount() == 3;
+}
+
+fun isWellFormedDepositPayload(payloadSlice: slice): bool {
+    if (
+        payloadSlice.remainingBitsCount() != 32 + 64 + 256 + 256 ||
+        payloadSlice.remainingRefsCount() != 1
+    ) {
+        return false;
+    }
+
+    var s = payloadSlice;
+    if (s.loadUint(32) != OP_DEPOSIT_PAYLOAD) {
+        return false;
+    }
+    s.skipBits(64 + 256 + 256);
+    return isWellFormedZkProofCell(s.loadRef());
+}
+
 fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotification) {
     var storage = lazy Storage.load();
     val identity = storage.identity.load();
@@ -216,10 +237,25 @@ fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotific
     // Parse the user-supplied forward payload. TEP-74 encodes it as
     // (Either Cell ^Cell): bit 0 = inline, bit 1 = in ref.
     var rawPayload = msg.forwardPayload;
-    val eitherBit = rawPayload.loadInt(1);
-    val payloadSlice = eitherBit != 0 ? rawPayload.loadRef().beginParse() : rawPayload;
+    if (rawPayload.remainingBitsCount() < 1) {
+        return refundDeposit(jw!, msg, Errors.InvalidDepositPayload);
+    }
+    val eitherBit = rawPayload.loadUint(1);
+    var payloadSlice = createEmptySlice();
+    if (eitherBit == 0) {
+        payloadSlice = rawPayload;
+    } else {
+        if (rawPayload.remainingBitsCount() != 0 || rawPayload.remainingRefsCount() != 1) {
+            return refundDeposit(jw!, msg, Errors.InvalidDepositPayload);
+        }
+        payloadSlice = rawPayload.loadRef().beginParse();
+    }
 
-    val depositPayload = lazy DepositPayload.fromSlice(payloadSlice);
+    if (!isWellFormedDepositPayload(payloadSlice)) {
+        return refundDeposit(jw!, msg, Errors.InvalidDepositPayload);
+    }
+
+    val depositPayload = DepositPayload.fromSlice(payloadSlice);
     val commitment = depositPayload.commitment;
     val newRoot = depositPayload.newRoot;
 

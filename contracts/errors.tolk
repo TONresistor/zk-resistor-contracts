@@ -16,6 +16,7 @@ enum Errors {
     TreeFull = 114
     InvalidInsertProof = 115
     InsufficientDepositValue = 116
+    InvalidDepositPayload = 117
 
     // Pool: withdraw
     InsufficientGas = 120

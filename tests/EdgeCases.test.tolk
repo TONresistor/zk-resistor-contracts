@@ -374,11 +374,17 @@ get fun `test Pool deposit is refunded when commitment is already used`() {
     // Build a forward payload carrying the duplicate commitment so the pool
     // hits the CommitmentAlreadyExists branch (before the proof check).
     val depositPayload = beginCell()
-        .storeUint(0xd6e05111, 32) // OP_DEPOSIT
+        .storeUint(OP_DEPOSIT_PAYLOAD, 32)
         .storeUint(7, 64) // queryId
         .storeUint(existingCommitment, 256)
         .storeUint(0, 256) // newRoot (irrelevant: branch fires before verifier)
-        .storeRef(beginCell().endCell()) // proof ref placeholder
+        .storeRef(
+            beginCell()
+                .storeRef(beginCell().endCell())
+                .storeRef(beginCell().endCell())
+                .storeRef(beginCell().endCell())
+                .endCell(),
+        )
         .endCell();
     val forwardPayload = beginCell()
         .storeUint(1, 1) // Either: right side (ref)
@@ -409,33 +415,56 @@ get fun `test Pool deposit is refunded when commitment is already used`() {
 // Pool refund: malformed forward_payload
 // ============================================================================
 
-get fun `test Pool deposit with malformed forward_payload bounces safely`() {
+fun expectMalformedDepositRefunds(forwardPayload: slice) {
     val jw = testing.treasury("jw").address;
     val pool = forgePool(jw, 0, []);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
 
-    // A 0-bit forward payload cannot satisfy `loadInt(1)`: TVM throws
-    // cellUnderflow during compute. The tx must NOT succeed (we don't want
-    // a silent state mutation), and the jettons must bounce back via the
-    // standard TEP-74 bounce path.
-    val empty = createEmptySlice();
     val user = testing.treasury("user");
-    // The tx will fail in compute phase (cellUnderflow): that's the
-    // intended outcome: pool state stays clean, jettons bounce back via
-    // TEP-74's automatic bounce path. We don't care about res shape,
-    // only the invariant.
-    pool.sendJettonTransferNotification(
+    val res = pool.sendJettonTransferNotification(
         jw,
         1,
         EDGE_DENOM,
         user.address,
-        empty,
+        forwardPayload,
         { value: ton("0.7") },
     );
 
+    expect(res).toHaveSuccessfulTx({ from: jw, to: pool.address });
+    expect(res).toHaveSuccessfulTx({
+        from: pool.address,
+        to: jw,
+        opcode: OP_JETTON_TRANSFER,
+    });
     expect(pool.nextIndex()).toEqual(0);
+}
+
+get fun `test Pool deposit with empty forward_payload refunds safely`() {
+    expectMalformedDepositRefunds(createEmptySlice());
+}
+
+get fun `test Pool deposit with missing payload ref refunds safely`() {
+    expectMalformedDepositRefunds(beginCell().storeUint(1, 1).endCell().beginParse());
+}
+
+get fun `test Pool deposit with malformed proof cell refunds safely`() {
+    val badPayload = beginCell()
+        .storeUint(1, 1)
+        .storeRef(
+            beginCell()
+                .storeUint(OP_DEPOSIT_PAYLOAD, 32)
+                .storeUint(1, 64)
+                .storeUint(0x1234, 256)
+                .storeUint(0x5678, 256)
+                .storeRef(beginCell().endCell())
+                .endCell(),
+        )
+        .endCell()
+        .beginParse();
+
+    expectMalformedDepositRefunds(badPayload);
 }
 
 // ============================================================================

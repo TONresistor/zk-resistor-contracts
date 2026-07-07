@@ -60,9 +60,9 @@ const REGISTRY_RENT_PER_POOL: coins = 20000000 // 0.02 TON
 // refunded to msg.fromUser.
 const MIN_DEPOSIT_VALUE: coins = 320000000 // 0.32 TON
 
-// Used by the bounce parser to recover queryId from a failed outgoing
-// JettonTransfer. Other opcodes are embedded in `struct (0x...)` literals.
+// Shared opcodes used outside their `struct (0x...)` definitions.
 const OP_JETTON_TRANSFER: int = 0x0f8a7ea5
+const OP_DEPOSIT_PAYLOAD: int = 0xd6e05111
 
 // Outgoing withdrawal transfers use the high query-id bit as a domain tag.
 // Deposit refunds always clear it. This lets the bounce handler distinguish
