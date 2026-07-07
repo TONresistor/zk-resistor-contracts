@@ -13,10 +13,10 @@
     "check:constraints": "node scripts/check-constraints.js",
     "check:toolchain": "node scripts/check-toolchain.js",
     "check:zeros": "node scripts/check-zeros.js",
-    "export:vk:insert": "snarkjs zkey export verificationkey build/insert_final.zkey build/insert_vk.json",
-    "export:vk:withdraw": "snarkjs zkey export verificationkey build/withdraw_final.zkey build/withdraw_vk.json",
-    "vk-to-tolk:insert": "node scripts/vk-to-tolk.js build/insert_vk.json INSERT > ../contracts/verifier-insert-vk.tolk",
-    "vk-to-tolk:withdraw": "node scripts/vk-to-tolk.js build/withdraw_vk.json WITHDRAW > ../contracts/verifier-withdraw-vk.tolk"
+    "export:vk:insert": "mkdir -p vk && snarkjs zkey export verificationkey build/insert_final.zkey vk/insert_vk.json",
+    "export:vk:withdraw": "mkdir -p vk && snarkjs zkey export verificationkey build/withdraw_final.zkey vk/withdraw_vk.json",
+    "vk-to-tolk:insert": "node scripts/vk-to-tolk.js vk/insert_vk.json INSERT > ../contracts/verifier-insert-vk.tolk",
+    "vk-to-tolk:withdraw": "node scripts/vk-to-tolk.js vk/withdraw_vk.json WITHDRAW > ../contracts/verifier-withdraw-vk.tolk"
   },
   "dependencies": {
     "@noble/curves": "2.2.0",

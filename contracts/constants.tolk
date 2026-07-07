@@ -1,7 +1,6 @@
 // When true, the verifier short-circuits to `return true` and bypasses the
-// on-chain pairing. Required for the test suite when the trusted-setup
-// ceremony has not yet produced real verifying keys. Mainnet build MUST
-// have this false; CI fails the build otherwise.
+// on-chain pairing. This is a local-only escape hatch; mainnet and CI builds
+// MUST keep it false.
 const MOCK_VERIFIER: bool = false
 
 // Lower 248 bits of an address hash, used as the field-element binding for

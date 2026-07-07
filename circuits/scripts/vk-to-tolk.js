@@ -28,12 +28,11 @@ function emitG1Function(name, point) {
         `fun ${name}(): slice {`,
         `    return beginCell()`,
     ];
-    for (let i = 0; i < 8; i += 4) {
-        lines.push(
-            `        .storeUint(${chunks[i]}, 48).storeUint(${chunks[i + 1]}, 48).storeUint(${chunks[i + 2]}, 48).storeUint(${chunks[i + 3]}, 48)`,
-        );
+    for (let i = 0; i < 8; i++) {
+        lines.push(`        .storeUint(${chunks[i]}, 48)`);
     }
-    lines.push(`        .endCell().beginParse();`);
+    lines.push(`        .endCell()`);
+    lines.push(`        .beginParse();`);
     lines.push(`}`);
     return lines.join("\n");
 }
@@ -45,12 +44,11 @@ function emitG2Function(name, point) {
         `fun ${name}(): slice {`,
         `    return beginCell()`,
     ];
-    for (let i = 0; i < 8; i += 4) {
-        lines.push(
-            `        .storeUint(${chunks[i]}, 96).storeUint(${chunks[i + 1]}, 96).storeUint(${chunks[i + 2]}, 96).storeUint(${chunks[i + 3]}, 96)`,
-        );
+    for (let i = 0; i < 8; i++) {
+        lines.push(`        .storeUint(${chunks[i]}, 96)`);
     }
-    lines.push(`        .endCell().beginParse();`);
+    lines.push(`        .endCell()`);
+    lines.push(`        .beginParse();`);
     lines.push(`}`);
     return lines.join("\n");
 }
@@ -65,15 +63,14 @@ function emitIcFunction(prefix, IC) {
         const chunks = g1ToChunks(IC[idx]);
         lines.push(`    if (i == ${idx}) {`);
         lines.push(`        return beginCell()`);
-        for (let i = 0; i < 8; i += 4) {
-            lines.push(
-                `            .storeUint(${chunks[i]}, 48).storeUint(${chunks[i + 1]}, 48).storeUint(${chunks[i + 2]}, 48).storeUint(${chunks[i + 3]}, 48)`,
-            );
+        for (let i = 0; i < 8; i++) {
+            lines.push(`            .storeUint(${chunks[i]}, 48)`);
         }
-        lines.push(`            .endCell().beginParse();`);
+        lines.push(`            .endCell()`);
+        lines.push(`            .beginParse();`);
         lines.push(`    }`);
     }
-    lines.push(`    throw 0xFFFE;  // unreachable for valid index`);
+    lines.push(`    throw 0xFFFE; // unreachable for valid index`);
     lines.push(`}`);
     return lines.join("\n");
 }

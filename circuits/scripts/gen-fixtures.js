@@ -18,35 +18,34 @@ const { poseidon2 } = await import("./poseidon-bls.js");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BUILD = resolve(__dirname, "../build");
+const VK = resolve(__dirname, "../vk");
 const OUT_FILE = resolve(__dirname, "../../tests/proofs-fixture.tolk");
 
 const INSERT_WASM = `${BUILD}/insert_js/insert.wasm`;
 const INSERT_ZKEY = `${BUILD}/insert_final.zkey`;
-const INSERT_VK = `${BUILD}/insert_vk.json`;
+const INSERT_VK = `${VK}/insert_vk.json`;
 const WITHDRAW_WASM = `${BUILD}/withdraw_js/withdraw.wasm`;
 const WITHDRAW_ZKEY = `${BUILD}/withdraw_final.zkey`;
-const WITHDRAW_VK = `${BUILD}/withdraw_vk.json`;
+const WITHDRAW_VK = `${VK}/withdraw_vk.json`;
 
 function emitG1Slice(name, chunks) {
     const lines = [`fun ${name}(): slice {`, `    return beginCell()`];
-    for (let i = 0; i < 8; i += 4) {
-        lines.push(
-            `        .storeUint(${chunks[i]}, 48).storeUint(${chunks[i + 1]}, 48).storeUint(${chunks[i + 2]}, 48).storeUint(${chunks[i + 3]}, 48)`,
-        );
+    for (let i = 0; i < 8; i++) {
+        lines.push(`        .storeUint(${chunks[i]}, 48)`);
     }
-    lines.push(`        .endCell().beginParse();`);
+    lines.push(`        .endCell()`);
+    lines.push(`        .beginParse();`);
     lines.push(`}`);
     return lines.join("\n");
 }
 
 function emitG2Slice(name, chunks) {
     const lines = [`fun ${name}(): slice {`, `    return beginCell()`];
-    for (let i = 0; i < 8; i += 4) {
-        lines.push(
-            `        .storeUint(${chunks[i]}, 96).storeUint(${chunks[i + 1]}, 96).storeUint(${chunks[i + 2]}, 96).storeUint(${chunks[i + 3]}, 96)`,
-        );
+    for (let i = 0; i < 8; i++) {
+        lines.push(`        .storeUint(${chunks[i]}, 96)`);
     }
-    lines.push(`        .endCell().beginParse();`);
+    lines.push(`        .endCell()`);
+    lines.push(`        .beginParse();`);
     lines.push(`}`);
     return lines.join("\n");
 }
@@ -118,10 +117,10 @@ const lines = [
     `// =========================================================`,
     `// INSERT: proves new_root = insert(old_root, commitment, leafIndex)`,
     `// =========================================================`,
-    `const FIXTURE_INSERT_OLD_ROOT: uint256 = ${insertW.oldRoot};`,
-    `const FIXTURE_INSERT_NEW_ROOT: uint256 = ${insertW.newRoot};`,
-    `const FIXTURE_INSERT_COMMITMENT: uint256 = ${insertW.commitment};`,
-    `const FIXTURE_INSERT_LEAF_INDEX: uint32 = ${insertW.leafIndex};`,
+    `const FIXTURE_INSERT_OLD_ROOT: uint256 = ${insertW.oldRoot}`,
+    `const FIXTURE_INSERT_NEW_ROOT: uint256 = ${insertW.newRoot}`,
+    `const FIXTURE_INSERT_COMMITMENT: uint256 = ${insertW.commitment}`,
+    `const FIXTURE_INSERT_LEAF_INDEX: uint32 = ${insertW.leafIndex}`,
     ``,
     emitG1Slice("fixtureInsertProofA", g1ToChunks(pi.pi_a)),
     ``,
@@ -132,15 +131,15 @@ const lines = [
     `// =========================================================`,
     `// WITHDRAW: proves commitment in tree with matching nullifier`,
     `// =========================================================`,
-    `const FIXTURE_WITHDRAW_ROOT: uint256 = ${ww.root};`,
-    `const FIXTURE_WITHDRAW_NULLIFIER_HASH: uint256 = ${ww.nullifierHash};`,
+    `const FIXTURE_WITHDRAW_ROOT: uint256 = ${ww.root}`,
+    `const FIXTURE_WITHDRAW_NULLIFIER_HASH: uint256 = ${ww.nullifierHash}`,
     `// recipientField = lower 248 bits of the address hash, matching`,
     `// frontend/src/lib/note.ts:addressToField and the contract's derivation.`,
     `// The full raw hash is exposed so tests can reconstruct the address via`,
     `// address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW).`,
     `// Friendly form: ${RECIPIENT_ADDR}`,
-    `const FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW: uint256 = 0x${RECIPIENT_HASH_HEX};`,
-    `const FIXTURE_WITHDRAW_RECIPIENT: uint256 = ${ww.recipient};`,
+    `const FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW: uint256 = 0x${RECIPIENT_HASH_HEX}`,
+    `const FIXTURE_WITHDRAW_RECIPIENT: uint256 = ${ww.recipient}`,
     ``,
     emitG1Slice("fixtureWithdrawProofA", g1ToChunks(pw.pi_a)),
     ``,
@@ -152,3 +151,4 @@ const lines = [
 writeFileSync(OUT_FILE, lines.join("\n") + "\n");
 console.log(`\n✓ wrote ${OUT_FILE}`);
 console.log(`  Use in tests/RealProof.test.tolk with MOCK_VERIFIER=false`);
+process.exit(0);
