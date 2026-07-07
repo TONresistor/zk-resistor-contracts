@@ -39,6 +39,7 @@ fun freshPool(): Pool {
         jettonWallet: testing.treasury("jw").address,
         relayerReserve: 0,
         merkle: merkle.toCell(),
+        withdrawals: [],
     });
 }
 

@@ -43,9 +43,8 @@ fun onInternalMessage(in: InMessage) {
 }
 
 fun onBouncedMessage(in: InMessageBounced) {
-    // Bounced JettonTransfer from handleWithdraw: jettons return to the
-    // pool's JW, nullifier stays spent. Emit a WithdrawBouncedEvent so
-    // indexers can correlate by queryId.
+    // Only withdrawal transfers use the high query-id domain. Refund bounces
+    // deliberately remain outside this recovery state machine.
     var bouncedBody = in.bouncedBody;
     bouncedBody.skipBouncedPrefix();
     if (bouncedBody.remainingBitsCount() < 32 + 64) {
@@ -55,13 +54,43 @@ fun onBouncedMessage(in: InMessageBounced) {
     if (originalOpcode != OP_JETTON_TRANSFER) {
         return;
     }
-    val queryId = bouncedBody.loadUint(64);
+    val wireQueryId = bouncedBody.loadUint(64) as uint64;
+    if ((wireQueryId & JETTON_WITHDRAW_QUERY_DOMAIN) == 0) {
+        return;
+    }
+    val queryId: uint64 = wireQueryId & JETTON_QUERY_ID_MASK;
+
+    var storage = lazy Storage.load();
+    val jw = storage.jettonWallet;
+    if (jw == null || in.senderAddress != jw!) {
+        return;
+    }
+
+    val recoveryEntry = storage.withdrawals.get(queryId);
+    if (!recoveryEntry.isFound) {
+        return;
+    }
+    var recovery = recoveryEntry.loadValue().load();
+    recovery.retryable = true;
+    storage.withdrawals.set(queryId, recovery.toCell());
+    storage.save();
+
+    // Return the TON that came back with the failed transfer to the account
+    // that funded this attempt. The pool never profits from a payout bounce.
+    val gasRefund = createMessage({
+        bounce: false,
+        dest: recovery.lastPayer,
+        value: 0,
+    });
+    // SAFETY: only the remaining value of this authenticated bounce is carried;
+    // the pool's pre-existing balance is never swept.
+    gasRefund.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
 
     val event = createExternalLogMessage({
         dest: ExtOutLogBucket { topic: 0xdef001 },
-        body: WithdrawBouncedEvent { queryId: queryId as uint64 },
+        body: WithdrawBouncedEvent { queryId },
     });
-    event.send(SEND_MODE_REGULAR);
+    event.send(SEND_MODE_IGNORE_ERRORS);
 }
 
 // ============================================================================
@@ -125,6 +154,18 @@ fun refundDeposit(
     msg: JettonTransferNotification,
     reason: int,
 ) {
+    // Pass the complete remaining inbound TON value through the pool's jetton
+    // wallet. TEP-74 returns the unused part to responseDestination. This
+    // avoids both trapping user TON and subsidizing malformed deposits from
+    // the pool's own rent / relayer reserves.
+    sendJettonWithRemainingValue(
+        jw,
+        msg.fromUser,
+        msg.amount,
+        msg.queryId & JETTON_QUERY_ID_MASK,
+        msg.fromUser,
+    );
+
     val event = createExternalLogMessage({
         dest: ExtOutLogBucket { topic: 0xdef000 },
         body: DepositRefundedEvent {
@@ -133,9 +174,7 @@ fun refundDeposit(
             reason: reason as uint16,
         },
     });
-    event.send(SEND_MODE_REGULAR);
-
-    sendJetton(jw, msg.fromUser, msg.amount, msg.queryId);
+    event.send(SEND_MODE_IGNORE_ERRORS);
 }
 
 fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotification) {
@@ -244,6 +283,7 @@ fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotific
 
 fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
     assert (valueCoins >= MIN_WITHDRAW_GAS) throw Errors.InsufficientGas;
+    assert (msg.queryId <= JETTON_QUERY_ID_MASK) throw Errors.InvalidQueryId;
 
     var storage = lazy Storage.load();
     val identity = storage.identity.load();
@@ -252,14 +292,55 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
     val jw = storage.jettonWallet;
     assert (jw != null) throw Errors.JettonWalletNotSet;
 
-    // Derive the field the proof is bound to from msg.recipient: a
-    // "recipient swap" produces a different field and fails the proof.
-    // Reject malformed shapes (non-basechain, hash=0) so we never burn a
-    // nullifier without a payable destination.
-    val (workchain, recipientHash) = msg.recipient.getWorkchainAndHash();
-    assert (workchain == 0) throw Errors.InvalidRecipient;
-    assert (recipientHash != 0) throw Errors.InvalidRecipient;
-    val recipientField: uint256 = recipientHash & ADDRESS_FIELD_MASK;
+    val recipientField = recipientToField(msg.recipient);
+
+    // A queryId with an existing recovery record is a retry, never a second
+    // withdrawal. The original root/nullifier were verified before the first
+    // payout, so a retry may use that stored root even after it ages out of
+    // rootHistory. A fresh proof binds any replacement recipient.
+    val recoveryEntry = storage.withdrawals.get(msg.queryId);
+    if (recoveryEntry.isFound) {
+        var recovery = recoveryEntry.loadValue().load();
+        assert (recovery.retryable) throw Errors.WithdrawalNotRetryable;
+        assert (
+            msg.root == recovery.root && msg.nullifierHash == recovery.nullifierHash
+        ) throw Errors.InvalidRetry;
+
+        val retryProof = msg.proof.load();
+        val retryOk = verifyWithdrawProof(
+            recovery.root,
+            recovery.nullifierHash,
+            recipientField,
+            retryProof.proofA.load().raw,
+            retryProof.proofB.load().raw,
+            retryProof.proofC.load().raw,
+        );
+        assert (retryOk) throw Errors.InvalidWithdrawProof;
+
+        recovery.lastPayer = sender;
+        recovery.retryable = false;
+        storage.withdrawals.set(msg.queryId, recovery.toCell());
+        storage.save();
+
+        val wireQueryId = msg.queryId | JETTON_WITHDRAW_QUERY_DOMAIN;
+        sendJettonWithRemainingValue(
+            jw!,
+            msg.recipient,
+            identity.denomination,
+            wireQueryId,
+            sender,
+        );
+
+        val retryEvent = createExternalLogMessage({
+            dest: ExtOutLogBucket { topic: 0xdef003 },
+            body: WithdrawRetriedEvent {
+                queryId: msg.queryId,
+                recipient: msg.recipient,
+            },
+        });
+        retryEvent.send(SEND_MODE_IGNORE_ERRORS);
+        return;
+    }
 
     assert (merkle.isKnownRoot(msg.root)) throw Errors.UnknownRoot;
 
@@ -298,9 +379,21 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
     storage.relayerReserve = storage.relayerReserve - RELAYER_REIMBURSEMENT;
     merkle.markNullifierSpent(msg.nullifierHash);
     storage.merkle = merkle.toCell();
+    storage
+        .withdrawals
+        .set(
+            msg.queryId,
+            (JettonWithdrawalRecovery {
+                root: msg.root,
+                nullifierHash: msg.nullifierHash,
+                lastPayer: sender,
+                retryable: false,
+            }).toCell(),
+        );
     storage.save();
 
-    sendJetton(jw!, msg.recipient, recipientAmount, msg.queryId);
+    val wireQueryId = msg.queryId | JETTON_WITHDRAW_QUERY_DOMAIN;
+    sendJetton(jw!, msg.recipient, recipientAmount, wireQueryId, sender);
 
     val withdrawEvent = createExternalLogMessage({
         dest: ExtOutLogBucket { topic: 0x717d3a },
@@ -318,7 +411,7 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
     // preserved: every later withdraw still finds its own earmark intact and
     // no single broadcaster can sweep the pool.
     reserveToncoinsOnBalance(
-        contract.getOriginalBalance() - RELAYER_REIMBURSEMENT,
+        contract.getOriginalBalance() - valueCoins - RELAYER_REIMBURSEMENT,
         RESERVE_MODE_AT_MOST,
     );
     val senderPay = createMessage({
@@ -326,6 +419,8 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
         dest: sender,
         value: 0,
     });
+    // SAFETY: reserveToncoinsOnBalance pins the pool buffer and every remaining
+    // relayer earmark before only the current withdrawal's surplus is carried.
     senderPay.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 }
 
@@ -333,7 +428,20 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
 // HELPERS
 // ============================================================================
 
-fun sendJetton(jettonWallet: address, to: address, amount: coins, queryId: uint64) {
+fun recipientToField(recipient: address): uint256 {
+    val (workchain, recipientHash) = recipient.getWorkchainAndHash();
+    assert (workchain == 0) throw Errors.InvalidRecipient;
+    assert (recipientHash != 0) throw Errors.InvalidRecipient;
+    return recipientHash & ADDRESS_FIELD_MASK;
+}
+
+fun sendJetton(
+    jettonWallet: address,
+    to: address,
+    amount: coins,
+    queryId: uint64,
+    responseDestination: address,
+) {
     val transferMessage = createMessage({
         bounce: true,
         dest: jettonWallet,
@@ -342,10 +450,33 @@ fun sendJetton(jettonWallet: address, to: address, amount: coins, queryId: uint6
             queryId,
             amount,
             destination: to,
-            responseDestination: to,
+            responseDestination,
         },
     });
     transferMessage.send(SEND_MODE_PAY_FEES_SEPARATELY);
+}
+
+fun sendJettonWithRemainingValue(
+    jettonWallet: address,
+    to: address,
+    amount: coins,
+    queryId: uint64,
+    responseDestination: address,
+) {
+    val transferMessage = createMessage({
+        bounce: true,
+        dest: jettonWallet,
+        value: 0,
+        body: JettonTransfer {
+            queryId,
+            amount,
+            destination: to,
+            responseDestination,
+        },
+    });
+    // SAFETY: carries only the current inbound message value. Used for
+    // self-funded refunds and retries so pool reserves cannot be drained.
+    transferMessage.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE);
 }
 
 // ============================================================================
@@ -385,6 +516,12 @@ get fun nextIndex(): uint32 {
 get fun relayerReserve(): coins {
     val storage = lazy Storage.load();
     return storage.relayerReserve;
+}
+
+get fun isWithdrawalRetryable(queryId: uint64): bool {
+    val storage = lazy Storage.load();
+    val recovery = storage.withdrawals.get(queryId);
+    return recovery.isFound && recovery.loadValue().load().retryable;
 }
 
 get fun treeDepth(): int {

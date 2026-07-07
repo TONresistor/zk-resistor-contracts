@@ -22,6 +22,18 @@ struct Storage {
     jettonWallet: address?
     relayerReserve: coins
     merkle: Cell<MerkleState>
+    withdrawals: map<uint64, Cell<JettonWithdrawalRecovery>>
+}
+
+// Durable recovery record for the first asynchronous hop
+// Pool -> Pool's jetton wallet. `retryable` is set only by an authenticated
+// bounced JettonTransfer. A successful first hop leaves it false forever,
+// preventing duplicate payouts even though TEP-74 has no universal final ACK.
+struct JettonWithdrawalRecovery {
+    root: uint256
+    nullifierHash: uint256
+    lastPayer: address
+    retryable: bool
 }
 
 struct MerkleState {
@@ -166,6 +178,13 @@ struct (0xdef000) DepositRefundedEvent {
 // queryId lets indexers correlate with the original WithdrawEvent.
 struct (0xdef001) WithdrawBouncedEvent {
     queryId: uint64
+}
+
+// Emitted when a previously bounced payout is re-sent. The same queryId and
+// nullifier remain consumed; retries never release a second relayer reward.
+struct (0xdef003) WithdrawRetriedEvent {
+    queryId: uint64
+    recipient: address
 }
 
 // Outgoing TEP-74 jetton transfer.

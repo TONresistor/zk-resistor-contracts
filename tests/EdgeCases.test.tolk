@@ -38,6 +38,7 @@ fun forgePool(jw: address?, nextIdx: uint32, commitments: map<uint256, uint32>):
         jettonWallet: jw,
         relayerReserve: 0,
         merkle: merkle.toCell(),
+        withdrawals: [],
     });
 }
 

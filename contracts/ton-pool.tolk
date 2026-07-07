@@ -224,7 +224,7 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     // accumulated buffer is preserved: every later withdraw still finds its
     // own earmark + denomination intact and no broadcaster can sweep the pool.
     reserveToncoinsOnBalance(
-        contract.getOriginalBalance() - RELAYER_REIMBURSEMENT - recipientAmount,
+        contract.getOriginalBalance() - valueCoins - RELAYER_REIMBURSEMENT - recipientAmount,
         RESERVE_MODE_AT_MOST,
     );
     val senderPay = createMessage({
@@ -232,6 +232,8 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
         dest: sender,
         value: 0,
     });
+    // SAFETY: reserveToncoinsOnBalance pins the pool buffer, every remaining
+    // earmark, and every pending native payout before the surplus is carried.
     senderPay.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 }
 

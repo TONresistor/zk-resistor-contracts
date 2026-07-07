@@ -120,6 +120,8 @@ fun handleCreatePool(_sender: address, valueCoins: coins, msg: CreatePool) {
         value: 0,
         body: InitWalletBinding { queryId: msg.queryId },
     });
+    // SAFETY: reserveFactoryRentBudget pins every registry rent allocation;
+    // only the caller-funded surplus is forwarded to the deterministic pool.
     deployMsg.send(SEND_MODE_CARRY_ALL_BALANCE);
 }
 
@@ -174,6 +176,8 @@ fun handleCreateTonPool(_sender: address, valueCoins: coins, msg: CreateTonPool)
         dest: poolDeployed,
         value: 0,
     });
+    // SAFETY: reserveFactoryRentBudget pins every registry rent allocation;
+    // only the caller-funded surplus is forwarded to the deterministic pool.
     deployMsg.send(SEND_MODE_CARRY_ALL_BALANCE);
 }
 
@@ -217,6 +221,7 @@ fun calcDeployedPool(
         jettonWallet: null,
         relayerReserve: 0,
         merkle: initialMerkle.toCell(),
+        withdrawals: [],
     };
 
     return { stateInit: { code: poolCode, data: initialStorage.toCell() } };

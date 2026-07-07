@@ -1,6 +1,8 @@
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
+import "@acton/types/message"
+import "@acton/types/transaction"
 import "@contracts/constants"
 import "@contracts/errors"
 import "@contracts/pool-types"
@@ -47,6 +49,7 @@ fun setupPool(): (Pool, Treasury, address) {
         jettonWallet, // pre-set for E2E; prod uses InitWalletBinding
         relayerReserve: 0,
         merkle: merkle.toCell(),
+        withdrawals: [],
     });
     val res = pool.deploy(deployer.address, { value: ton("1") });
     expect(res).toHaveSuccessfulDeploy({ to: pool.address });
@@ -308,7 +311,7 @@ get fun `test full accounting: deposit+withdraw conservation`() {
     // === WITHDRAW (relayer broadcasts) ===
     val withdrawRes = pool.sendWithdraw(
         relayer.address,
-        2,
+        JETTON_QUERY_ID_MASK,
         FIXTURE_WITHDRAW_ROOT,
         FIXTURE_WITHDRAW_NULLIFIER_HASH,
         fixtureRecipient(),
@@ -332,8 +335,8 @@ get fun `test full accounting: deposit+withdraw conservation`() {
     // it covered) plus its unused gas — never the pool buffer.
     val relayerBalAfter = testing.getAccountBalance(relayer.address);
     val relayerNet = relayerBalAfter - relayerBalBefore;
-    expect(relayerNet > ton("0.15")).toEqual(true);
-    expect(relayerNet < ton("0.32")).toEqual(true);
+    expect(relayerNet > ton("0.32")).toEqual(true);
+    expect(relayerNet < ton("0.38")).toEqual(true);
 }
 
 get fun `test deposit below MIN_DEPOSIT_VALUE is refunded (anti-spam)`() {
@@ -569,6 +572,8 @@ get fun `test failed deposit does not double-fire excess refund`() {
     val reserveAfterFirst = pool.relayerReserve();
     val indexAfterFirst = pool.nextIndex();
 
+    val poolBalanceBeforeRefund = testing.getAccountBalance(pool.address);
+
     // Second deposit with the SAME commitment: hits the duplicate-commitment
     // refund branch. The contract returns the jettons via refundDeposit(),
     // which must NOT be followed by the success-path TON excess refund.
@@ -585,6 +590,8 @@ get fun `test failed deposit does not double-fire excess refund`() {
     // State preserved (no second insert).
     expect(pool.nextIndex()).toEqual(indexAfterFirst);
     expect(pool.relayerReserve()).toEqual(reserveAfterFirst);
+    val poolBalanceAfterRefund = testing.getAccountBalance(pool.address);
+    expect(poolBalanceAfterRefund - poolBalanceBeforeRefund < ton("0.05")).toEqual(true);
 
     // Jetton refund leg present (pool sends jettons back through its JW).
     expect(res).toHaveSuccessfulTx({
@@ -660,6 +667,189 @@ get fun `test real nullifier replay is rejected`() {
         to: pool.address,
         exitCode: Errors.NullifierAlreadySpent,
     });
+}
+
+get fun `test bounced jetton payout can be retried without a second relayer reward`() {
+    val (pool, _, jettonWallet) = setupPool();
+    val user = testing.treasury("user");
+    val relayer = testing.treasury("relayer");
+
+    expect(
+        pool.sendJettonTransferNotification(
+            jettonWallet,
+            1,
+            TEST_DENOMINATION,
+            user.address,
+            buildDepositForwardPayload(),
+            { value: MIN_DEPOSIT_VALUE },
+        ),
+    ).toHaveSuccessfulTx({ to: pool.address });
+
+    expect(
+        pool.sendWithdraw(
+            relayer.address,
+            2,
+            FIXTURE_WITHDRAW_ROOT,
+            FIXTURE_WITHDRAW_NULLIFIER_HASH,
+            fixtureRecipient(),
+            realWithdrawProof(),
+            { value: MIN_WITHDRAW_GAS },
+        ),
+    ).toHaveSuccessfulTx({ from: pool.address, to: jettonWallet, opcode: OP_JETTON_TRANSFER });
+    expect(pool.relayerReserve()).toEqual(0);
+    expect(pool.isWithdrawalRetryable(2)).toEqual(false);
+
+    val wireQueryId: uint64 = (1 << 63) | 2;
+    val bouncedBody = beginCell()
+        .storeUint(0xFFFFFFFF, 32)
+        .storeSlice(
+            (JettonTransfer {
+                queryId: wireQueryId,
+                amount: TEST_DENOMINATION,
+                destination: fixtureRecipient(),
+                responseDestination: relayer.address,
+            })
+                .toCell()
+                .beginParse(),
+        )
+        .endCell();
+    val bouncedMessage = createMessage({
+        bounce: false,
+        dest: pool.address,
+        value: JETTON_TRANSFER_GAS,
+        body: bouncedBody,
+    }).bounced();
+    testing.processSingleTraceStep(testing.treasury("attacker").address, bouncedMessage);
+    expect(pool.isWithdrawalRetryable(2)).toEqual(false);
+
+    val refundDomainBounce = createMessage({
+        bounce: false,
+        dest: pool.address,
+        value: JETTON_TRANSFER_GAS,
+        body: beginCell()
+            .storeUint(0xFFFFFFFF, 32)
+            .storeSlice(
+                (JettonTransfer {
+                    queryId: 2,
+                    amount: TEST_DENOMINATION,
+                    destination: fixtureRecipient(),
+                    responseDestination: relayer.address,
+                })
+                    .toCell()
+                    .beginParse(),
+            )
+            .endCell(),
+    }).bounced();
+    testing.processSingleTraceStep(jettonWallet, refundDomainBounce);
+    expect(pool.isWithdrawalRetryable(2)).toEqual(false);
+
+    val unknownWithdrawalBounce = createMessage({
+        bounce: false,
+        dest: pool.address,
+        value: JETTON_TRANSFER_GAS,
+        body: beginCell()
+            .storeUint(0xFFFFFFFF, 32)
+            .storeSlice(
+                (JettonTransfer {
+                    queryId: JETTON_WITHDRAW_QUERY_DOMAIN | 999,
+                    amount: TEST_DENOMINATION,
+                    destination: fixtureRecipient(),
+                    responseDestination: relayer.address,
+                })
+                    .toCell()
+                    .beginParse(),
+            )
+            .endCell(),
+    }).bounced();
+    val unknownBounceResult = testing.processSingleTraceStep(jettonWallet, unknownWithdrawalBounce);
+    val unknownBounceDescription = unknownBounceResult.tx.load().description.load();
+    if (unknownBounceDescription is TlbTransOrd) {
+        if (unknownBounceDescription.computePh is TlbTrComputeVm) {
+            expect(unknownBounceDescription.computePh.success).toEqual(true);
+        } else {
+            expect(false).toEqual(true);
+        }
+    } else {
+        expect(false).toEqual(true);
+    }
+
+    val authenticatedBounce = testing.processSingleTraceStep(jettonWallet, bouncedMessage);
+    expect(pool.isWithdrawalRetryable(2)).toEqual(true);
+    expect(authenticatedBounce.outMessages.size()).toEqual(2);
+    val bounceRefund = (authenticatedBounce
+        .outMessages
+        .atCell(0) as Cell<TlbMessageRelaxedGeneric>).load();
+    expect(bounceRefund.info.dest).toEqual(relayer.address);
+    expect(bounceRefund.info.value.grams > 0).toEqual(true);
+    expect(bounceRefund.info.bounce).toEqual(false);
+
+    val retrySender = testing.treasury("retry-sender");
+    expect(
+        pool.sendWithdraw(
+            retrySender.address,
+            2,
+            FIXTURE_WITHDRAW_ROOT + 1,
+            FIXTURE_WITHDRAW_NULLIFIER_HASH,
+            fixtureRecipient(),
+            realWithdrawProof(),
+            { value: MIN_WITHDRAW_GAS },
+        ),
+    ).toHaveFailedTx({ to: pool.address, exitCode: Errors.InvalidRetry });
+    expect(pool.isWithdrawalRetryable(2)).toEqual(true);
+
+    expect(
+        pool.sendWithdraw(
+            retrySender.address,
+            2,
+            FIXTURE_WITHDRAW_ROOT,
+            FIXTURE_WITHDRAW_NULLIFIER_HASH,
+            testing.treasury("attacker-recipient").address,
+            realWithdrawProof(),
+            { value: MIN_WITHDRAW_GAS },
+        ),
+    ).toHaveFailedTx({ to: pool.address, exitCode: Errors.InvalidWithdrawProof });
+    expect(pool.isWithdrawalRetryable(2)).toEqual(true);
+
+    val retry = pool.sendWithdraw(
+        retrySender.address,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+    expect(retry).toHaveSuccessfulTx({ from: retrySender.address, to: pool.address });
+    expect(retry).toHaveSuccessfulTx({
+        from: pool.address,
+        to: jettonWallet,
+        opcode: OP_JETTON_TRANSFER,
+    });
+    val retryTransferTx = retry.findTransaction<JettonTransfer>({
+        from: pool.address,
+        to: jettonWallet,
+    })!;
+    val retryTransferMessage = retryTransferTx.loadInMsg<JettonTransfer>();
+    if (retryTransferMessage.info is TlbInternalMessage) {
+        expect(retryTransferMessage.info.bounce).toEqual(true);
+    } else {
+        expect(false).toEqual(true);
+    }
+    expect(retry).toNotHaveTx({ from: pool.address, to: retrySender.address });
+    expect(pool.relayerReserve()).toEqual(0);
+    expect(pool.isWithdrawalRetryable(2)).toEqual(false);
+
+    expect(
+        pool.sendWithdraw(
+            retrySender.address,
+            2,
+            FIXTURE_WITHDRAW_ROOT,
+            FIXTURE_WITHDRAW_NULLIFIER_HASH,
+            fixtureRecipient(),
+            realWithdrawProof(),
+            { value: MIN_WITHDRAW_GAS },
+        ),
+    ).toHaveFailedTx({ to: pool.address, exitCode: Errors.WithdrawalNotRetryable });
 }
 
 // ============================================================================

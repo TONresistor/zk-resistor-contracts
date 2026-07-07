@@ -24,7 +24,10 @@ enum Errors {
     InvalidWithdrawProof = 124
     InsufficientReserve = 127
     InsufficientBalance = 128
+    InvalidQueryId = 129
     InvalidRecipient = 130
+    WithdrawalNotRetryable = 131
+    InvalidRetry = 132
 
     // Factory
     PoolAlreadyExists = 200

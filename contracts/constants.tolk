@@ -64,6 +64,12 @@ const MIN_DEPOSIT_VALUE: coins = 320000000 // 0.32 TON
 // JettonTransfer. Other opcodes are embedded in `struct (0x...)` literals.
 const OP_JETTON_TRANSFER: int = 0x0f8a7ea5
 
+// Outgoing withdrawal transfers use the high query-id bit as a domain tag.
+// Deposit refunds always clear it. This lets the bounce handler distinguish
+// retryable payouts from refunds without trusting user-controlled opcodes.
+const JETTON_WITHDRAW_QUERY_DOMAIN: uint64 = 1 << 63
+const JETTON_QUERY_ID_MASK: uint64 = (1 << 63) - 1
+
 // Gas budget for outgoing jetton transfers (paid in TON).
 const JETTON_TRANSFER_GAS: coins = 50000000 // 0.05 TON
 

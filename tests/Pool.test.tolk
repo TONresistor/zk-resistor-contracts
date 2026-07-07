@@ -28,6 +28,7 @@ fun freshPool(jettonWallet: address): Pool {
         jettonWallet, // pre-set for these tests; in prod the factory sets it
         relayerReserve: 0,
         merkle: merkle.toCell(),
+        withdrawals: [],
     });
 }
 
@@ -125,6 +126,28 @@ get fun `test withdraw with insufficient gas is rejected`() {
         to: pool.address,
         exitCode: Errors.InsufficientGas,
     });
+}
+
+get fun `test withdraw queryId domain bit is reserved`() {
+    val (pool, _, _) = setupDeployedPool();
+    val anyone = testing.treasury("anyone");
+    val zeroProof: ZkProof = {
+        proofA: (G1Point { raw: createEmptySlice() }).toCell(),
+        proofB: (G2Point { raw: createEmptySlice() }).toCell(),
+        proofC: (G1Point { raw: createEmptySlice() }).toCell(),
+    };
+
+    expect(
+        pool.sendWithdraw(
+            anyone.address,
+            1 << 63,
+            0,
+            0,
+            anyone.address,
+            zeroProof,
+            { value: MIN_WITHDRAW_GAS },
+        ),
+    ).toHaveFailedTx({ to: pool.address, exitCode: Errors.InvalidQueryId });
 }
 
 get fun `test unknown non-empty message is rejected`() {

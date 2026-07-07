@@ -156,6 +156,10 @@ fun Pool.relayerReserve(self): coins {
     return net.runGetMethod(self.address, "relayerReserve");
 }
 
+fun Pool.isWithdrawalRetryable(self, queryId: uint64): bool {
+    return net.runGetMethod(self.address, "isWithdrawalRetryable", [queryId]);
+}
+
 fun Pool.treeDepth(self): int {
     return net.runGetMethod(self.address, "treeDepth");
 }
