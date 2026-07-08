@@ -2,9 +2,13 @@ import "@acton/build"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
+import "@acton/tlb/maybe"
+import "@acton/types/message"
+import "@acton/types/transaction"
 import "@contracts/constants"
 import "@contracts/errors"
 import "@contracts/factory-types"
+import "@contracts/pool-types"
 import "@wrappers/Factory.gen"
 
 fun freshFactory(): Factory {
@@ -58,6 +62,16 @@ get fun `test createPool deploys a pool and registers it`() {
         from: user.address,
         to: factory.address,
     });
+    val deployTx = res.findTransaction<InitWalletBinding>({
+        from: factory.address,
+        to: expectedAddr,
+    })!;
+    val deployMsg = deployTx.loadInMsg<InitWalletBinding>();
+    if (deployMsg.info is TlbInternalMessage) {
+        expect(deployMsg.info.bounce).toEqual(true);
+    } else {
+        expect(false).toEqual(true);
+    }
 
     expect(factory.poolCount()).toEqual(1);
     expect(factory.poolAddressFor(jettonMaster, denom)).toEqual(expectedAddr);
@@ -135,6 +149,22 @@ get fun `test createPool with insufficient fee is rejected`() {
     });
 }
 
+get fun `test createPool accepts exact minimum fee`() {
+    val (factory, _, user) = setupDeployedFactory();
+    val jettonMaster = testing.treasury("usdt-master").address;
+
+    val res = factory.sendCreatePool(
+        user.address,
+        1,
+        jettonMaster,
+        100,
+        { value: MIN_CREATE_POOL_FEE },
+    );
+
+    expect(res).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    expect(factory.poolCount()).toEqual(1);
+}
+
 get fun `test createTonPool with insufficient fee is rejected`() {
     val (factory, _, user) = setupDeployedFactory();
 
@@ -151,6 +181,20 @@ get fun `test createTonPool with insufficient fee is rejected`() {
     });
 }
 
+get fun `test createTonPool accepts exact minimum fee`() {
+    val (factory, _, user) = setupDeployedFactory();
+
+    val res = factory.sendCreateTonPool(
+        user.address,
+        1,
+        TON_POOL_DENOM_100,
+        { value: MIN_CREATE_POOL_FEE },
+    );
+
+    expect(res).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    expect(factory.tonPoolCount()).toEqual(1);
+}
+
 // ============================================================================
 // CreateTonPool (native TON pools with fixed-denomination whitelist)
 // ============================================================================
@@ -163,6 +207,12 @@ get fun `test createTonPool deploys a TonPool at whitelisted denom`() {
     val res = factory.sendCreateTonPool(user.address, 1, denom, { value: ton("1") });
 
     expect(res).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    val deployTx = res.findTransaction({
+        from: factory.address,
+        to: expectedAddr,
+    })!;
+    val deployMsg = deployTx.messages.load().inMsg.unwrap().load();
+    expect(deployMsg.info.bounce).toEqual(true);
     expect(factory.tonPoolCount()).toEqual(1);
     expect(factory.tonPoolAddressFor(denom)).toEqual(expectedAddr);
 }
@@ -250,6 +300,46 @@ get fun `test factory tracks jetton + TON pools independently`() {
     expect(factory.tonPoolCount()).toEqual(1);
 }
 
+get fun `test factory retains rent for mixed jetton and TON pools`() {
+    val (factory, _, user) = setupDeployedFactory();
+    val jettonMaster = testing.treasury("usdt-master").address;
+
+    factory.sendCreatePool(
+        user.address,
+        1,
+        jettonMaster,
+        100,
+        { value: ton("1") },
+    );
+    factory.sendCreateTonPool(user.address, 2, TON_POOL_DENOM_100, { value: ton("1") });
+
+    val balance = testing.getAccountBalance(factory.address);
+    val target: coins = FACTORY_TON_RESERVE + REGISTRY_RENT_PER_POOL * 2;
+    val slack: coins = 10000000;
+    expect(balance >= target - slack).toEqual(true);
+    expect(balance <= target + slack).toEqual(true);
+}
+
+get fun `test factory retains rent for TON then jetton pools`() {
+    val (factory, _, user) = setupDeployedFactory();
+    val jettonMaster = testing.treasury("usdt-master").address;
+
+    factory.sendCreateTonPool(user.address, 1, TON_POOL_DENOM_100, { value: ton("1") });
+    factory.sendCreatePool(
+        user.address,
+        2,
+        jettonMaster,
+        100,
+        { value: ton("1") },
+    );
+
+    val balance = testing.getAccountBalance(factory.address);
+    val target: coins = FACTORY_TON_RESERVE + REGISTRY_RENT_PER_POOL * 2;
+    val slack: coins = 10000000;
+    expect(balance >= target - slack).toEqual(true);
+    expect(balance <= target + slack).toEqual(true);
+}
+
 get fun `test factory accepts empty body (passive forward)`() {
     val (factory, _, user) = setupDeployedFactory();
 
@@ -258,6 +348,22 @@ get fun `test factory accepts empty body (passive forward)`() {
     expect(res).toHaveSuccessfulTx({
         from: user.address,
         to: factory.address,
+    });
+}
+
+get fun `test factory rejects unknown non-empty body`() {
+    val (factory, _, user) = setupDeployedFactory();
+
+    val res = factory.sendAny(
+        user.address,
+        beginCell().storeUint(0xdeadbeef, 32).endCell(),
+        { value: ton("0.05") },
+    );
+
+    expect(res).toHaveFailedTx({
+        from: user.address,
+        to: factory.address,
+        exitCode: Errors.InvalidMessage,
     });
 }
 
@@ -345,22 +451,35 @@ get fun `test factory rolls back registry when jetton pool deploy bounces`() {
 }
 
 get fun `test factory rolls back registry when TON pool deploy bounces`() {
-    // TonPool deploy gets sent with empty body. To force a bounce we need
-    // the deployed contract to throw on the empty-body branch. TonPool's
-    // empty-body handler forwards to factory which succeeds, so we can't use
-    // TonPool itself as the "broken code". Use Pool code instead: an empty
-    // body on Pool hits the `else` branch which calls `forwardToFactory` after
-    // verifying `in.body.isEmpty()`, that succeeds. Actually Pool also
-    // accepts empty body. We need a code that throws on empty.
-    //
-    // Substitute the Factory's own code for tonPoolCode: it throws on
-    // empty body (factory's `else => assert(isEmpty)` then no forward, just
-    // accepts, actually that also succeeds).
-    //
-    // For now, this scenario is hard to force in the sandbox without a
-    // dedicated "always-bouncing" stub contract. The jetton pool test
-    // above already exercises the same `onBouncedMessage` code path, so we
-    // accept this coverage gap.
-    val (factory, _, _) = setupDeployedFactory();
+    val (factory, _, user) = setupDeployedFactory();
+    val denom: coins = TON_POOL_DENOM_10;
+    val tonPoolAddr = factory.expectedTonPoolAddress(denom);
+
+    expect(
+        factory.sendCreateTonPool(user.address, 1, denom, { value: ton("1") }),
+    ).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    expect(factory.tonPoolCount()).toEqual(1);
+    expect(factory.tonPoolAddressFor(denom)).toEqual(tonPoolAddr);
+
+    val bouncedMessage = createMessage({
+        bounce: false,
+        dest: factory.address,
+        value: ton("0.01"),
+        body: beginCell().storeUint(0xFFFFFFFF, 32).endCell(),
+    }).bounced();
+
+    val bounceRes = testing.processSingleTraceStep(tonPoolAddr, bouncedMessage);
+    val description = bounceRes.tx.load().description.load();
+    if (description is TlbTransOrd) {
+        if (description.computePh is TlbTrComputeVm) {
+            expect(description.computePh.success).toEqual(true);
+        } else {
+            expect(false).toEqual(true);
+        }
+    } else {
+        expect(false).toEqual(true);
+    }
+
     expect(factory.tonPoolCount()).toEqual(0);
+    expect(factory.tonPoolAddressFor(denom)).toEqual(null);
 }

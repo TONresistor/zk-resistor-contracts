@@ -441,6 +441,14 @@ fun expectMalformedDepositRefunds(forwardPayload: slice) {
     expect(pool.nextIndex()).toEqual(0);
 }
 
+fun dummyProofCell(): cell {
+    return beginCell()
+        .storeRef(beginCell().endCell())
+        .storeRef(beginCell().endCell())
+        .storeRef(beginCell().endCell())
+        .endCell();
+}
+
 get fun `test Pool deposit with empty forward_payload refunds safely`() {
     expectMalformedDepositRefunds(createEmptySlice());
 }
@@ -459,6 +467,43 @@ get fun `test Pool deposit with malformed proof cell refunds safely`() {
                 .storeUint(0x1234, 256)
                 .storeUint(0x5678, 256)
                 .storeRef(beginCell().endCell())
+                .endCell(),
+        )
+        .endCell()
+        .beginParse();
+
+    expectMalformedDepositRefunds(badPayload);
+}
+
+get fun `test Pool deposit with wrong payload opcode refunds safely`() {
+    val badPayload = beginCell()
+        .storeUint(1, 1)
+        .storeRef(
+            beginCell()
+                .storeUint(0xdeadbeef, 32)
+                .storeUint(1, 64)
+                .storeUint(0x1234, 256)
+                .storeUint(0x5678, 256)
+                .storeRef(dummyProofCell())
+                .endCell(),
+        )
+        .endCell()
+        .beginParse();
+
+    expectMalformedDepositRefunds(badPayload);
+}
+
+get fun `test Pool deposit with ref payload trailing bits refunds safely`() {
+    val badPayload = beginCell()
+        .storeUint(1, 1)
+        .storeUint(1, 1)
+        .storeRef(
+            beginCell()
+                .storeUint(OP_DEPOSIT_PAYLOAD, 32)
+                .storeUint(1, 64)
+                .storeUint(0x1234, 256)
+                .storeUint(0x5678, 256)
+                .storeRef(dummyProofCell())
                 .endCell(),
         )
         .endCell()

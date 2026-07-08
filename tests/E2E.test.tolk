@@ -29,7 +29,7 @@ fun fixtureRecipient(): address {
     return address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW);
 }
 
-fun setupPool(): (Pool, Treasury, address) {
+fun setupPoolWithDeployValue(deployValue: coins): (Pool, Treasury, address) {
     val deployer = testing.treasury("deployer");
     val jettonWallet = testing.treasury("pool-jw").address;
     val identity: PoolIdentity = {
@@ -51,7 +51,50 @@ fun setupPool(): (Pool, Treasury, address) {
         merkle: merkle.toCell(),
         withdrawals: [],
     });
-    val res = pool.deploy(deployer.address, { value: ton("1") });
+    val res = pool.deploy(deployer.address, { value: deployValue });
+    expect(res).toHaveSuccessfulDeploy({ to: pool.address });
+    return (pool, deployer, jettonWallet);
+}
+
+fun setupPool(): (Pool, Treasury, address) {
+    return setupPoolWithDeployValue(ton("1"));
+}
+
+fun setupUnderfundedWithdrawPool(): (Pool, Treasury, address) {
+    return setupWithdrawStatePool(RELAYER_REIMBURSEMENT, ton("0.10"), false);
+}
+
+fun setupWithdrawStatePool(
+    relayerReserve: coins,
+    deployValue: coins,
+    useHistoricalRoot: bool,
+): (Pool, Treasury, address) {
+    val deployer = testing.treasury("deployer");
+    val jettonWallet = testing.treasury("pool-jw").address;
+    val identity: PoolIdentity = {
+        jettonMaster: testing.treasury("jetton-master").address,
+        factory: testing.treasury("factory").address,
+        denomination: TEST_DENOMINATION,
+    };
+    var rootHistory: map<uint32, uint256> = [];
+    if (useHistoricalRoot) {
+        rootHistory.set(0, FIXTURE_WITHDRAW_ROOT);
+    }
+    val merkle: MerkleState = {
+        nextIndex: 1,
+        currentRoot: useHistoricalRoot ? FIXTURE_WITHDRAW_ROOT + 1 : FIXTURE_WITHDRAW_ROOT,
+        rootHistory,
+        nullifiers: [],
+        commitments: [],
+    };
+    val pool = Pool.fromStorage({
+        identity: identity.toCell(),
+        jettonWallet,
+        relayerReserve,
+        merkle: merkle.toCell(),
+        withdrawals: [],
+    });
+    val res = pool.deploy(deployer.address, { value: deployValue });
     expect(res).toHaveSuccessfulDeploy({ to: pool.address });
     return (pool, deployer, jettonWallet);
 }
@@ -116,6 +159,27 @@ get fun `test real deposit advances root and stores commitment (inline payload)`
     expect(pool.currentRoot()).toEqual(FIXTURE_INSERT_NEW_ROOT);
 }
 
+get fun `test deposit at floor fails if pool reserve is underfunded`() {
+    val (pool, _, jettonWallet) = setupPoolWithDeployValue(ton("0.01"));
+
+    val res = pool.sendJettonTransferNotification(
+        jettonWallet,
+        1,
+        TEST_DENOMINATION,
+        testing.treasury("user").address,
+        buildDepositForwardPayload(),
+        { value: MIN_DEPOSIT_VALUE },
+    );
+
+    expect(res).toHaveFailedTx({
+        from: jettonWallet,
+        to: pool.address,
+        exitCode: Errors.InsufficientBalance,
+    });
+    expect(pool.nextIndex()).toEqual(0);
+    expect(pool.relayerReserve()).toEqual(0);
+}
+
 get fun `test real deposit succeeds with FE ref-encoded forward payload`() {
     val (pool, _, jettonWallet) = setupPool();
 
@@ -170,6 +234,71 @@ get fun `test real withdraw spends nullifier and pays recipient + sender`() {
         from: pool.address,
         to: relayer,
     });
+}
+
+get fun `test withdraw fails if pool balance cannot cover reserved payout`() {
+    val (pool, _, _) = setupUnderfundedWithdrawPool();
+    val relayer = testing.treasury("relayer").address;
+
+    val res = pool.sendWithdraw(
+        relayer,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveFailedTx({
+        to: pool.address,
+        exitCode: Errors.InsufficientBalance,
+    });
+    expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
+}
+
+get fun `test withdraw fails if relayer reserve is missing`() {
+    val (pool, _, _) = setupWithdrawStatePool(0, ton("1"), false);
+    val relayer = testing.treasury("relayer").address;
+
+    val res = pool.sendWithdraw(
+        relayer,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveFailedTx({
+        to: pool.address,
+        exitCode: Errors.InsufficientReserve,
+    });
+    expect(pool.relayerReserve()).toEqual(0);
+}
+
+get fun `test withdraw accepts a root from recent history`() {
+    val (pool, _, jettonWallet) = setupWithdrawStatePool(RELAYER_REIMBURSEMENT, ton("1"), true);
+    val relayer = testing.treasury("relayer").address;
+
+    val res = pool.sendWithdraw(
+        relayer,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveSuccessfulTx({ to: pool.address });
+    expect(res).toHaveSuccessfulTx({
+        from: pool.address,
+        to: jettonWallet,
+        opcode: OP_JETTON_TRANSFER,
+    });
+    expect(pool.relayerReserve()).toEqual(0);
 }
 
 // ============================================================================
@@ -685,9 +814,34 @@ get fun `test bounced jetton payout can be retried without a second relayer rewa
         ),
     ).toHaveSuccessfulTx({ to: pool.address });
 
+    val res = pool.sendWithdraw(
+        relayer.address,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+    expect(
+        res,
+    ).toHaveSuccessfulTx({ from: pool.address, to: jettonWallet, opcode: OP_JETTON_TRANSFER });
+    val firstTransferTx = res.findTransaction<JettonTransfer>({
+        from: pool.address,
+        to: jettonWallet,
+    })!;
+    val firstTransferMessage = firstTransferTx.loadInMsg<JettonTransfer>();
+    if (firstTransferMessage.info is TlbInternalMessage) {
+        expect(firstTransferMessage.info.bounce).toEqual(true);
+    } else {
+        expect(false).toEqual(true);
+    }
+    expect(pool.relayerReserve()).toEqual(0);
+    expect(pool.isWithdrawalRetryable(2)).toEqual(false);
+
     expect(
         pool.sendWithdraw(
-            relayer.address,
+            testing.treasury("query-reuser").address,
             2,
             FIXTURE_WITHDRAW_ROOT,
             FIXTURE_WITHDRAW_NULLIFIER_HASH,
@@ -695,8 +849,7 @@ get fun `test bounced jetton payout can be retried without a second relayer rewa
             realWithdrawProof(),
             { value: MIN_WITHDRAW_GAS },
         ),
-    ).toHaveSuccessfulTx({ from: pool.address, to: jettonWallet, opcode: OP_JETTON_TRANSFER });
-    expect(pool.relayerReserve()).toEqual(0);
+    ).toHaveFailedTx({ to: pool.address, exitCode: Errors.WithdrawalNotRetryable });
     expect(pool.isWithdrawalRetryable(2)).toEqual(false);
 
     val wireQueryId: uint64 = (1 << 63) | 2;

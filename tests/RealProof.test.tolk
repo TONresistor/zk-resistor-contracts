@@ -133,6 +133,14 @@ fun underLengthG1(): slice {
     return beginCell().storeUint(0, 200).endCell().beginParse();
 }
 
+fun overLengthG1(): slice {
+    return beginCell().storeUint(0, 256).storeUint(0, 144).endCell().beginParse();
+}
+
+fun underLengthG2(): slice {
+    return beginCell().storeUint(0, 256).storeUint(0, 256).storeUint(0, 188).endCell().beginParse();
+}
+
 fun overLengthG2(): slice {
     // 800 bits total (expected 768). storeUint caps at 256 bits per call,
     // so chain four stores: 256 + 256 + 256 + 32 = 800.
@@ -159,6 +167,47 @@ get fun `test insert proof rejected when proofA is under-length`() {
     expect(ok).toEqual(false);
 }
 
+get fun `test insert proof rejected when proofB is under-length`() {
+    val pool = setupPool();
+    val ok = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        underLengthG2(), // 700 bits, expected 768
+        fixtureInsertProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test insert proof rejected when proofC is over-length`() {
+    val pool = setupPool();
+    val ok = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        overLengthG1(), // 400 bits, expected 384
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test withdraw proof rejected when proofA is over-length`() {
+    val pool = setupPool();
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        overLengthG1(), // 400 bits, expected 384
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
 get fun `test withdraw proof rejected when proofB is over-length`() {
     val pool = setupPool();
     val ok = pool.previewWithdrawProof(
@@ -168,6 +217,19 @@ get fun `test withdraw proof rejected when proofB is over-length`() {
         fixtureWithdrawProofA(),
         overLengthG2(), // 800 bits, expected 768
         fixtureWithdrawProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test withdraw proof rejected when proofC is under-length`() {
+    val pool = setupPool();
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        fixtureWithdrawProofB(),
+        underLengthG1(), // 200 bits, expected 384
     );
     expect(ok).toEqual(false);
 }
