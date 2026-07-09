@@ -47,6 +47,8 @@ fun setupDeployedPool(): (Pool, Treasury, address) {
 get fun `test deploy succeeds and exposes initial getters`() {
     val (pool, _, jettonWallet) = setupDeployedPool();
 
+    expect(pool.jettonMaster()).toEqual(testing.treasury("jetton-master").address);
+    expect(pool.factory()).toEqual(testing.treasury("factory").address);
     expect(pool.denomination()).toEqual(TEST_DENOMINATION);
     expect(pool.jettonWallet()).toEqual(jettonWallet);
     expect(pool.currentRoot()).toEqual(0);
@@ -75,6 +77,7 @@ get fun `test deposit from non-jetton-wallet is silently dropped`() {
         to: pool.address,
     });
     expect(pool.nextIndex()).toEqual(0); // pool state unchanged
+    expect(res).toNotHaveTx({ from: pool.address });
 }
 
 get fun `test deposit with wrong amount is refunded`() {

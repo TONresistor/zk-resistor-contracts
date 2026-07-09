@@ -1,6 +1,8 @@
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
+import "@acton/types/message"
+import "@acton/types/transaction"
 import "@contracts/constants"
 import "@contracts/errors"
 import "@contracts/pool-types"
@@ -136,6 +138,7 @@ get fun `test Pool InitWalletBinding is idempotent once bound`() {
     val res = pool.sendInitWalletBinding(anyone.address, 1, { value: ton("0.1") });
     expect(res).toHaveSuccessfulTx({ from: anyone.address, to: pool.address });
     expect(pool.jettonWallet()).toEqual(jw);
+    expect(res).toNotHaveTx({ from: pool.address, to: testing.treasury("jm").address });
 }
 
 get fun `test Pool InitWalletBinding sends TEP-89 query when wallet is null`() {
@@ -153,8 +156,52 @@ get fun `test Pool InitWalletBinding sends TEP-89 query when wallet is null`() {
         to: masterAddr,
         opcode: 0x2c76b973,
     });
+    val queryTx = res.findTransaction<ProvideWalletAddress>({
+        from: pool.address,
+        to: masterAddr,
+    })!;
+    val queryMessage = queryTx.loadInMsg<ProvideWalletAddress>();
+    if (queryMessage.info is TlbInternalMessage) {
+        expect(queryMessage.info.bounce).toEqual(true);
+    } else {
+        expect(false).toEqual(true);
+    }
+    val queryBody = queryMessage.loadBody();
+    expect(queryBody.includeAddress).toEqual(false);
     // No binding yet — that happens when the master replies.
     expect(pool.jettonWallet()).toEqual(null);
+}
+
+get fun `test Pool InitWalletBinding accepts exact query budget`() {
+    val masterAddr = testing.treasury("jm").address;
+    val pool = forgePool(null, 0, []);
+    expect(
+        pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
+    ).toHaveSuccessfulDeploy({ to: pool.address });
+
+    val res = pool.sendInitWalletBinding(
+        testing.treasury("anyone").address,
+        1,
+        { value: 60000000 },
+    );
+    expect(res).toHaveSuccessfulTx({ from: pool.address, to: masterAddr, opcode: 0x2c76b973 });
+}
+
+get fun `test Pool InitWalletBinding one nano below query budget is rejected`() {
+    val pool = forgePool(null, 0, []);
+    expect(
+        pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
+    ).toHaveSuccessfulDeploy({ to: pool.address });
+
+    val res = pool.sendInitWalletBinding(
+        testing.treasury("anyone").address,
+        1,
+        { value: 59999999 },
+    );
+    expect(res).toHaveFailedTx({
+        to: pool.address,
+        exitCode: Errors.InsufficientGas,
+    });
 }
 
 get fun `test Pool InitWalletBinding underfunded is rejected`() {
@@ -173,6 +220,31 @@ get fun `test Pool InitWalletBinding underfunded is rejected`() {
         exitCode: Errors.InsufficientGas,
     });
     expect(pool.jettonWallet()).toEqual(null);
+}
+
+// ============================================================================
+// Deposits before wallet binding
+// ============================================================================
+
+get fun `test Pool deposit before wallet binding is silently dropped`() {
+    val pool = forgePool(null, 0, []);
+    expect(
+        pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
+    ).toHaveSuccessfulDeploy({ to: pool.address });
+
+    val user = testing.treasury("user");
+    val res = pool.sendJettonTransferNotification(
+        testing.treasury("unbound-jw").address,
+        1,
+        EDGE_DENOM,
+        user.address,
+        createEmptySlice(),
+        { value: ton("0.7") },
+    );
+
+    expect(res).toHaveSuccessfulTx({ to: pool.address });
+    expect(pool.nextIndex()).toEqual(0);
+    expect(res).toNotHaveTx({ from: pool.address });
 }
 
 // ============================================================================

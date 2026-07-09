@@ -175,6 +175,25 @@ fun zeroG2(): slice {
         .beginParse();
 }
 
+fun invalidNonZeroG1(): slice {
+    return beginCell()
+        .storeUint(0x80, 8)
+        .storeUint(1, 256)
+        .storeUint(0, 120)
+        .endCell()
+        .beginParse();
+}
+
+fun invalidNonZeroG2(): slice {
+    return beginCell()
+        .storeUint(0x80, 8)
+        .storeUint(1, 256)
+        .storeUint(0, 256)
+        .storeUint(0, 248)
+        .endCell()
+        .beginParse();
+}
+
 get fun `test insert proof rejected when proofA is under-length`() {
     val pool = setupPool();
     val ok = pool.previewInsertProof(
@@ -213,6 +232,46 @@ get fun `test insert proof rejects valid G2 payload with trailing ref`() {
         fixtureInsertProofA(),
         withExtraRef(fixtureInsertProofB()),
         fixtureInsertProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test insert proof rejects valid proofC payload with trailing ref`() {
+    val pool = setupPool();
+    val ok = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        withExtraRef(fixtureInsertProofC()),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test withdraw proof rejects valid proofA payload with trailing ref`() {
+    val pool = setupPool();
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        withExtraRef(fixtureWithdrawProofA()),
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    expect(ok).toEqual(false);
+}
+
+get fun `test withdraw proof rejects valid proofB payload with trailing ref`() {
+    val pool = setupPool();
+    val ok = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        withExtraRef(fixtureWithdrawProofB()),
+        fixtureWithdrawProofC(),
     );
     expect(ok).toEqual(false);
 }
@@ -276,6 +335,71 @@ get fun `test withdraw proof rejects zero prover points`() {
     expect(zeroB).toEqual(false);
 }
 
+get fun `test insert proof rejects non-group prover points`() {
+    val pool = setupPool();
+    val badA = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        invalidNonZeroG1(),
+        fixtureInsertProofB(),
+        fixtureInsertProofC(),
+    );
+    val badB = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        invalidNonZeroG2(),
+        fixtureInsertProofC(),
+    );
+    val badC = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        invalidNonZeroG1(),
+    );
+    expect(badA).toEqual(false);
+    expect(badB).toEqual(false);
+    expect(badC).toEqual(false);
+}
+
+get fun `test withdraw proof rejects non-group prover points`() {
+    val pool = setupPool();
+    val badA = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        invalidNonZeroG1(),
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    val badB = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        invalidNonZeroG2(),
+        fixtureWithdrawProofC(),
+    );
+    val badC = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        fixtureWithdrawProofB(),
+        invalidNonZeroG1(),
+    );
+    expect(badA).toEqual(false);
+    expect(badB).toEqual(false);
+    expect(badC).toEqual(false);
+}
+
 get fun `test insert proof rejects public input field aliases`() {
     val pool = setupPool();
     val aliasedOldRoot = pool.previewInsertProof(
@@ -310,6 +434,40 @@ get fun `test insert proof rejects public input field aliases`() {
     expect(aliasedCommitment).toEqual(false);
 }
 
+get fun `test insert proof rejects public inputs exactly equal to scalar field order`() {
+    val pool = setupPool();
+    val rootAtR = pool.previewInsertProof(
+        BLS12_381_R,
+        FIXTURE_INSERT_NEW_ROOT,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        fixtureInsertProofC(),
+    );
+    val newRootAtR = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        BLS12_381_R,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        fixtureInsertProofC(),
+    );
+    val commitmentAtR = pool.previewInsertProof(
+        FIXTURE_INSERT_OLD_ROOT,
+        FIXTURE_INSERT_NEW_ROOT,
+        BLS12_381_R,
+        FIXTURE_INSERT_LEAF_INDEX,
+        fixtureInsertProofA(),
+        fixtureInsertProofB(),
+        fixtureInsertProofC(),
+    );
+    expect(rootAtR).toEqual(false);
+    expect(newRootAtR).toEqual(false);
+    expect(commitmentAtR).toEqual(false);
+}
+
 get fun `test withdraw proof rejects public input field aliases`() {
     val pool = setupPool();
     val aliasedRoot = pool.previewWithdrawProof(
@@ -330,6 +488,28 @@ get fun `test withdraw proof rejects public input field aliases`() {
     );
     expect(aliasedRoot).toEqual(false);
     expect(aliasedNullifier).toEqual(false);
+}
+
+get fun `test withdraw proof rejects public inputs exactly equal to scalar field order`() {
+    val pool = setupPool();
+    val rootAtR = pool.previewWithdrawProof(
+        BLS12_381_R,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    val nullifierAtR = pool.previewWithdrawProof(
+        FIXTURE_WITHDRAW_ROOT,
+        BLS12_381_R,
+        FIXTURE_WITHDRAW_RECIPIENT,
+        fixtureWithdrawProofA(),
+        fixtureWithdrawProofB(),
+        fixtureWithdrawProofC(),
+    );
+    expect(rootAtR).toEqual(false);
+    expect(nullifierAtR).toEqual(false);
 }
 
 get fun `test insert proof rejected when proofB is under-length`() {
