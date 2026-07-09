@@ -114,7 +114,7 @@ fun handleDeposit(_sender: address, valueCoins: coins, msg: TonDepositPayload) {
     storage.save();
 
     val depositEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xde9051 },
+        dest: ExtOutLogBucket { topic: 0x00de9051 },
         body: TonDepositEvent {
             leafIndex,
             commitment: msg.commitment,
@@ -205,7 +205,7 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     recipientPay.send(SEND_MODE_REGULAR);
 
     val withdrawEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0x717d3a },
+        dest: ExtOutLogBucket { topic: 0x00717d3a },
         body: TonWithdrawEvent {
             nullifierHash: msg.nullifierHash,
             recipient: msg.recipient,

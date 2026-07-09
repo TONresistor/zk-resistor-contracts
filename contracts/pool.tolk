@@ -131,7 +131,7 @@ fun handleTakeWalletAddress(sender: address, msg: TakeWalletAddress) {
     storage.save();
 
     val event = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xdef002 },
+        dest: ExtOutLogBucket { topic: 0x00def002 },
         body: PoolReadyEvent { jettonWallet: msg.walletAddress },
     });
     event.send(SEND_MODE_REGULAR);
@@ -173,7 +173,9 @@ fun isWellFormedDepositPayload(payloadSlice: slice): bool {
     if (s.loadUint(32) != OP_DEPOSIT_PAYLOAD) {
         return false;
     }
-    s.skipBits(64 + 256 + 256);
+    s.loadUint(64);  // queryId
+    s.loadUint(256); // commitment
+    s.loadUint(256); // newRoot
     return isWellFormedZkProofCell(s.loadRef());
 }
 
@@ -268,7 +270,7 @@ fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotific
     storage.save();
 
     val depositEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xde9051 },
+        dest: ExtOutLogBucket { topic: 0x00de9051 },
         body: DepositEvent {
             leafIndex,
             commitment,
@@ -403,7 +405,7 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
     sendJetton(jw!, msg.recipient, recipientAmount, wireQueryId, sender);
 
     val withdrawEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0x717d3a },
+        dest: ExtOutLogBucket { topic: 0x00717d3a },
         body: WithdrawEvent {
             nullifierHash: msg.nullifierHash,
             recipient: msg.recipient,

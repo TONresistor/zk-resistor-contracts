@@ -54,20 +54,20 @@ struct (0x4b6f0b50) TonWithdraw {
 
 // Legacy failure-event ABI retained for negative tests; current refund paths
 // do not emit contract-funded failure logs.
-struct (0xdef000) TonDepositRefundedEvent {
+struct (0x00def000) TonDepositRefundedEvent {
     fromUser: address
     amount: coins
     reason: uint16
 }
 
-struct (0xde9051) TonDepositEvent {
+struct (0x00de9051) TonDepositEvent {
     leafIndex: uint32
     commitment: uint256
     newRoot: uint256
     fromUser: address
 }
 
-struct (0x717d3a) TonWithdrawEvent {
+struct (0x00717d3a) TonWithdrawEvent {
     nullifierHash: uint256
     recipient: address
     payout: coins

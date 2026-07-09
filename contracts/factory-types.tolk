@@ -61,7 +61,7 @@ struct (0xa0c0c0c2) CreateTonPool {
 type AllowedFactoryMessage = CreatePool | CreateTonPool
 
 // jettonMaster is null for TON pools.
-struct (0xc0c0c0) FactoryPoolCreatedEvent {
+struct (0x00c0c0c0) FactoryPoolCreatedEvent {
     jettonMaster: address?
     denomination: coins
     poolAddress: address

@@ -118,7 +118,7 @@ fun handleCreatePool(sender: address, valueCoins: coins, msg: CreatePool) {
     reserveFactoryRentBudget(storage.poolCount + storage.tonPoolCount);
 
     val createdEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xc0c0c0 },
+        dest: ExtOutLogBucket { topic: 0x00c0c0c0 },
         body: FactoryPoolCreatedEvent {
             jettonMaster: msg.jettonMaster,
             denomination: msg.denomination,
@@ -181,7 +181,7 @@ fun handleCreateTonPool(sender: address, valueCoins: coins, msg: CreateTonPool) 
     // TonPools have no jettonMaster: the event reuses the same shape with
     // `jettonMaster = null`.
     val createdEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xc0c0c0 },
+        dest: ExtOutLogBucket { topic: 0x00c0c0c0 },
         body: FactoryPoolCreatedEvent {
             jettonMaster: null,
             denomination: msg.denomination,

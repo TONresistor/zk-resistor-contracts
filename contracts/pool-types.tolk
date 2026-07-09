@@ -150,18 +150,18 @@ struct (0xd1735400) TakeWalletAddress {
 }
 
 // Pool transitions to ready: jettonWallet locked.
-struct (0xdef002) PoolReadyEvent {
+struct (0x00def002) PoolReadyEvent {
     jettonWallet: address
 }
 
-struct (0xde9051) DepositEvent {
+struct (0x00de9051) DepositEvent {
     leafIndex: uint32
     commitment: uint256
     newRoot: uint256
     fromUser: address
 }
 
-struct (0x717d3a) WithdrawEvent {
+struct (0x00717d3a) WithdrawEvent {
     nullifierHash: uint256
     recipient: address
     payout: coins
@@ -169,7 +169,7 @@ struct (0x717d3a) WithdrawEvent {
 
 // Legacy failure-event ABI retained for negative tests; current refund paths
 // do not emit contract-funded failure logs.
-struct (0xdef000) DepositRefundedEvent {
+struct (0x00def000) DepositRefundedEvent {
     fromUser: address
     amount: coins
     reason: uint16
@@ -177,13 +177,13 @@ struct (0xdef000) DepositRefundedEvent {
 
 // Legacy failure-event ABI retained for negative tests; current bounce paths
 // refund remaining bounce gas to the last payer without emitting this log.
-struct (0xdef001) WithdrawBouncedEvent {
+struct (0x00def001) WithdrawBouncedEvent {
     queryId: uint64
 }
 
 // Legacy failure-event ABI retained for negative tests; current retry paths do
 // not emit contract-funded retry logs.
-struct (0xdef003) WithdrawRetriedEvent {
+struct (0x00def003) WithdrawRetriedEvent {
     queryId: uint64
     recipient: address
 }

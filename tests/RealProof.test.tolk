@@ -15,11 +15,9 @@ import "@wrappers/Pool.gen"
 //   circuit (circom) → setup (snarkjs) → witness (JS) → proof (snarkjs)
 //                   → BLST encoding → Tolk slice → TVM pairing check
 //
-// Fixture circuits are depth-4 variants of the production templates in
-// `circuits/insert.circom` and `circuits/withdraw.circom` (same constraint
-// structure, smaller tree for cheaper test compilation). A passing fixture
-// is strong evidence the production depth-20 pipeline works under the same
-// proving stack. To regenerate, see `circuits/scripts/gen-fixtures.js`.
+// Fixtures are generated from the production depth-20 circuits and final VKs.
+// A passing fixture validates the same proving stack used for deployment. To
+// regenerate, see `circuits/scripts/gen-fixtures.js`.
 // ============================================================================
 
 fun freshPool(): Pool {

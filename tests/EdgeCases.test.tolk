@@ -20,6 +20,11 @@ import "@wrappers/TonPool.gen"
 
 const EDGE_DENOM: coins = 100
 
+get fun `test jetton withdrawal query domain keeps high bit reserved`() {
+    expect(JETTON_QUERY_ID_MASK + 1).toEqual(JETTON_WITHDRAW_QUERY_DOMAIN);
+    expect(JETTON_QUERY_ID_MASK & JETTON_WITHDRAW_QUERY_DOMAIN).toEqual(0);
+}
+
 fun forgePool(jw: address?, nextIdx: uint32, commitments: map<uint256, uint32>): Pool {
     val identity: PoolIdentity = {
         jettonMaster: testing.treasury("jm").address,
@@ -469,6 +474,34 @@ get fun `test Pool deposit with malformed proof cell refunds safely`() {
                 .storeRef(beginCell().endCell())
                 .endCell(),
         )
+        .endCell()
+        .beginParse();
+
+    expectMalformedDepositRefunds(badPayload);
+}
+
+get fun `test Pool deposit with missing proof ref refunds safely`() {
+    val badPayload = beginCell()
+        .storeUint(0, 1)
+        .storeUint(OP_DEPOSIT_PAYLOAD, 32)
+        .storeUint(1, 64)
+        .storeUint(0x1234, 256)
+        .storeUint(0x5678, 256)
+        .endCell()
+        .beginParse();
+
+    expectMalformedDepositRefunds(badPayload);
+}
+
+get fun `test Pool deposit with inline payload trailing bit refunds safely`() {
+    val badPayload = beginCell()
+        .storeUint(0, 1)
+        .storeUint(OP_DEPOSIT_PAYLOAD, 32)
+        .storeUint(1, 64)
+        .storeUint(0x1234, 256)
+        .storeUint(0x5678, 256)
+        .storeUint(1, 1)
+        .storeRef(dummyProofCell())
         .endCell()
         .beginParse();
 

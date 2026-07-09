@@ -100,7 +100,7 @@ if (!(await snarkjs.groth16.verify(withdrawVk, psw, pw)))
 console.log("[withdraw] snarkjs verify ✓");
 
 // Sanity: insert.newRoot should equal withdraw.root since both use the
-// same commitment at leaf 0 in a depth-4 empty tree.
+// same commitment at leaf 0 in a depth-20 empty tree.
 if (BigInt(insertW.newRoot) !== BigInt(ww.root)) {
     console.warn(`[chain] WARNING: insert.newRoot != withdraw.root`);
     console.warn(`  insert.newRoot = ${insertW.newRoot}`);

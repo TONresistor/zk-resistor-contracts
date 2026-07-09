@@ -19,18 +19,18 @@ include "lib/merkle_tree.circom";
 //   private pathElements  : siblings on the path under leafIndex
 //   private zeros         : empty-subtree constants (one per level)
 //
-// SOUNDNESS NOTE: `zeros[]` is a witness-supplied private signal, NOT
-// constrained against the canonical empty-subtree Poseidon chain inside the
-// circuit. Soundness of insertion freshness therefore relies on TWO
+// SOUNDNESS NOTE: `zeros[]` is witness-supplied, but MerkleInsertProof pins it
+// to the canonical Poseidon empty-subtree chain baked in
+// `circuits/lib/merkle_tree.circom`. Insertion freshness also relies on TWO
 // upstream pool-contract checks that MUST stay in place:
 //
 //   - leafIndex == pool.nextIndex   (anti-replay across concurrent inserts)
 //   - oldRoot   == pool.currentRoot (no insertion against a stale root)
 //
-// Together these guarantee the prover can only produce a valid proof for
-// the next empty slot of the current tree. Relaxing either check (e.g.
-// accepting historical roots for inserts as withdraw does) would let a
-// malicious prover overwrite occupied leaves. Keep both checks in
+// Together these guarantee the prover can only produce a valid proof for the
+// next slot of the current tree. Relaxing either check (e.g. accepting
+// historical roots for inserts as withdraw does) would let a malicious prover
+// diverge the on-chain tree from the pool's append-only state. Keep both in
 // `pool.tolk:handleDeposit` / `ton-pool.tolk:handleDeposit`.
 //
 // The pool contract checks (per above):
