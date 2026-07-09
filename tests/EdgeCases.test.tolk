@@ -578,6 +578,59 @@ get fun `test TonPool deposit is refunded when commitment is already used`() {
     expect(pool.nextIndex()).toEqual(1); // unchanged
 }
 
+fun expectMalformedTonDepositProofRefunds(proofCell: cell) {
+    val pool = forgeTonPool(0, []);
+    expect(
+        pool.deploy(testing.treasury("deployer").address, { value: ton("1") }),
+    ).toHaveSuccessfulDeploy({ to: pool.address });
+
+    val user = testing.treasury("user");
+    val userBalBefore = testing.getAccountBalance(user.address);
+    val body = beginCell()
+        .storeUint(OP_DEPOSIT_PAYLOAD, 32)
+        .storeUint(1, 64)
+        .storeAddress(user.address)
+        .storeUint(0x1234, 256)
+        .storeUint(0x5678, 256)
+        .storeRef(proofCell)
+        .endCell();
+
+    val res = pool.sendAny(user.address, body, { value: ton("10.6") });
+
+    expect(res).toHaveSuccessfulTx({ from: user.address, to: pool.address });
+    expect(pool.nextIndex()).toEqual(0);
+    expect(pool.relayerReserve()).toEqual(0);
+    expect(pool.pendingWithdrawTon()).toEqual(0);
+    val userBalAfter = testing.getAccountBalance(user.address);
+    expect(userBalAfter > userBalBefore - ton("0.1")).toEqual(true);
+}
+
+get fun `test TonPool deposit with empty proof cell refunds safely`() {
+    expectMalformedTonDepositProofRefunds(beginCell().endCell());
+}
+
+get fun `test TonPool deposit with proof trailing bits refunds safely`() {
+    expectMalformedTonDepositProofRefunds(
+        beginCell()
+            .storeUint(1, 1)
+            .storeRef(beginCell().endCell())
+            .storeRef(beginCell().endCell())
+            .storeRef(beginCell().endCell())
+            .endCell(),
+    );
+}
+
+get fun `test TonPool deposit with four proof refs refunds safely`() {
+    expectMalformedTonDepositProofRefunds(
+        beginCell()
+            .storeRef(beginCell().endCell())
+            .storeRef(beginCell().endCell())
+            .storeRef(beginCell().endCell())
+            .storeRef(beginCell().endCell())
+            .endCell(),
+    );
+}
+
 // ============================================================================
 // TonPool: bounce handler is a no-op (state-preserving by design)
 // ============================================================================
@@ -618,10 +671,10 @@ get fun `test TonPool onBouncedMessage does not corrupt state`() {
 // path short-circuits to `true` even for tampered inputs.
 
 // ============================================================================
-// Refund event assertion: SDK consumers depend on opcode + leafIndex shape
+// Refund safety: failure paths refund but do not emit contract-funded logs
 // ============================================================================
 
-get fun `test Pool refund emits DepositRefundedEvent with correct opcode`() {
+get fun `test Pool refund sends jettons without external failure log`() {
     val jw = testing.treasury("jw").address;
     val pool = forgePool(jw, 0, []);
     expect(
@@ -640,11 +693,45 @@ get fun `test Pool refund emits DepositRefundedEvent with correct opcode`() {
     );
 
     expect(res).toHaveSuccessfulTx({ from: jw, to: pool.address });
-    // We can't directly assert ext-out body in current matcher, but we can
-    // confirm the jetton refund went out: proves refundDeposit() ran fully.
     expect(res).toHaveSuccessfulTx({
         from: pool.address,
         to: jw,
         opcode: 0x0f8a7ea5,
     });
+    expect(
+        res.findExternalOutMessage<DepositRefundedEvent>({ from: pool.address }) == null,
+    ).toEqual(true);
+}
+
+get fun `test TonPool refund sends TON without external failure log`() {
+    val pool = forgeTonPool(0, []);
+    expect(
+        pool.deploy(testing.treasury("deployer").address, { value: ton("1") }),
+    ).toHaveSuccessfulDeploy({ to: pool.address });
+
+    val user = testing.treasury("user");
+    val userBalBefore = testing.getAccountBalance(user.address);
+    val zeroProof: ZkProof = {
+        proofA: (G1Point { raw: createEmptySlice() }).toCell(),
+        proofB: (G2Point { raw: createEmptySlice() }).toCell(),
+        proofC: (G1Point { raw: createEmptySlice() }).toCell(),
+    };
+
+    val res = pool.sendTonDepositPayload(
+        user.address,
+        1,
+        user.address,
+        0x4242,
+        0,
+        zeroProof,
+        { value: ton("1") },
+    );
+
+    expect(res).toHaveSuccessfulTx({ from: user.address, to: pool.address });
+    expect(pool.nextIndex()).toEqual(0);
+    val userBalAfter = testing.getAccountBalance(user.address);
+    expect(userBalAfter > userBalBefore - ton("0.1")).toEqual(true);
+    expect(
+        res.findExternalOutMessage<TonDepositRefundedEvent>({ from: pool.address }) == null,
+    ).toEqual(true);
 }

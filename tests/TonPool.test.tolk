@@ -14,8 +14,7 @@ fun fixtureRecipient(): address {
     return address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW);
 }
 
-fun freshTonPool(): TonPool {
-    val factoryAddr = testing.treasury("factory").address;
+fun freshTonPoolWithFactory(factoryAddr: address): TonPool {
     val identity: TonPoolIdentity = { factory: factoryAddr, denomination: TEST_TON_DENOM };
     val merkle: MerkleState = {
         nextIndex: 0,
@@ -32,16 +31,43 @@ fun freshTonPool(): TonPool {
     });
 }
 
-fun setupDeployedTonPoolWithValue(deployValue: coins): (TonPool, Treasury) {
+fun freshTonPool(): TonPool {
+    return freshTonPoolWithFactory(testing.treasury("factory").address);
+}
+
+fun setupDeployedTonPoolWithFactoryAndValue(
+    factoryAddr: address,
+    deployValue: coins,
+): (TonPool, Treasury) {
     val deployer = testing.treasury("deployer");
-    val pool = freshTonPool();
+    val pool = freshTonPoolWithFactory(factoryAddr);
     val res = pool.deploy(deployer.address, { value: deployValue });
     expect(res).toHaveSuccessfulDeploy({ to: pool.address });
     return (pool, deployer);
 }
 
+fun setupDeployedTonPoolWithValue(deployValue: coins): (TonPool, Treasury) {
+    return setupDeployedTonPoolWithFactoryAndValue(
+        testing.treasury("factory").address,
+        deployValue,
+    );
+}
+
 fun setupDeployedTonPool(): (TonPool, Treasury) {
     return setupDeployedTonPoolWithValue(ton("1"));
+}
+
+fun setupDepositTonPoolWithExactBalance(
+    probeFactory: address,
+    factoryAddr: address,
+    targetBalance: coins,
+): TonPool {
+    val probeDeployValue = targetBalance + ton("0.01");
+    val (probe, _) = setupDeployedTonPoolWithFactoryAndValue(probeFactory, probeDeployValue);
+    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
+    val (pool, _) = setupDeployedTonPoolWithFactoryAndValue(factoryAddr, targetBalance + deployFee);
+    expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
+    return pool;
 }
 
 fun setupWithdrawStateTonPool(
@@ -50,7 +76,22 @@ fun setupWithdrawStateTonPool(
     deployValue: coins,
     useHistoricalRoot: bool,
 ): TonPool {
-    val factoryAddr = testing.treasury("factory").address;
+    return setupWithdrawStateTonPoolWithFactory(
+        testing.treasury("factory").address,
+        relayerReserve,
+        pendingWithdrawTon,
+        deployValue,
+        useHistoricalRoot,
+    );
+}
+
+fun setupWithdrawStateTonPoolWithFactory(
+    factoryAddr: address,
+    relayerReserve: coins,
+    pendingWithdrawTon: coins,
+    deployValue: coins,
+    useHistoricalRoot: bool,
+): TonPool {
     val identity: TonPoolIdentity = { factory: factoryAddr, denomination: TEST_TON_DENOM };
     var rootHistory: map<uint32, uint256> = [];
     if (useHistoricalRoot) {
@@ -71,6 +112,31 @@ fun setupWithdrawStateTonPool(
     });
     val res = pool.deploy(testing.treasury("deployer").address, { value: deployValue });
     expect(res).toHaveSuccessfulDeploy({ to: pool.address });
+    return pool;
+}
+
+fun setupWithdrawStateTonPoolWithExactBalance(
+    probeFactory: address,
+    factoryAddr: address,
+    targetBalance: coins,
+): TonPool {
+    val probeDeployValue = targetBalance + ton("0.01");
+    val probe = setupWithdrawStateTonPoolWithFactory(
+        probeFactory,
+        RELAYER_REIMBURSEMENT,
+        TEST_TON_DENOM,
+        probeDeployValue,
+        false,
+    );
+    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
+    val pool = setupWithdrawStateTonPoolWithFactory(
+        factoryAddr,
+        RELAYER_REIMBURSEMENT,
+        TEST_TON_DENOM,
+        targetBalance + deployFee,
+        false,
+    );
+    expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return pool;
 }
 
@@ -191,8 +257,41 @@ get fun `test TonPool withdraw with insufficient gas is rejected`() {
     });
 }
 
-get fun `test TonPool deposit at floor fails if pool reserve is underfunded`() {
+get fun `test TonPool deposit at floor refunds if pool reserve is underfunded`() {
     val (pool, _) = setupDeployedTonPoolWithValue(ton("0.01"));
+    val user = testing.treasury("user");
+    val userBalBefore = testing.getAccountBalance(user.address);
+
+    val res = pool.sendTonDepositPayload(
+        user.address,
+        1,
+        user.address,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_NEW_ROOT,
+        ZkProof {
+            proofA: (G1Point { raw: fixtureInsertProofA() }).toCell(),
+            proofB: (G2Point { raw: fixtureInsertProofB() }).toCell(),
+            proofC: (G1Point { raw: fixtureInsertProofC() }).toCell(),
+        },
+        { value: TEST_TON_DENOM + MIN_DEPOSIT_VALUE },
+    );
+
+    expect(res).toHaveSuccessfulTx({ from: user.address, to: pool.address });
+    expect(pool.nextIndex()).toEqual(0);
+    expect(pool.relayerReserve()).toEqual(0);
+    expect(pool.pendingWithdrawTon()).toEqual(0);
+
+    val userBalAfter = testing.getAccountBalance(user.address);
+    expect(userBalAfter > userBalBefore - ton("0.1")).toEqual(true);
+}
+
+get fun `test TonPool deposit succeeds at exact reserve threshold`() {
+    val targetBalance: coins = POOL_TON_RESERVE + RELAYER_REIMBURSEMENT - MIN_DEPOSIT_VALUE;
+    val pool = setupDepositTonPoolWithExactBalance(
+        testing.treasury("ton-deposit-exact-probe-factory").address,
+        testing.treasury("ton-deposit-exact-factory").address,
+        targetBalance,
+    );
     val user = testing.treasury("user");
 
     val res = pool.sendTonDepositPayload(
@@ -209,14 +308,37 @@ get fun `test TonPool deposit at floor fails if pool reserve is underfunded`() {
         { value: TEST_TON_DENOM + MIN_DEPOSIT_VALUE },
     );
 
-    expect(res).toHaveFailedTx({
-        from: user.address,
-        to: pool.address,
-        exitCode: Errors.InsufficientBalance,
-    });
+    expect(res).toHaveSuccessfulTx({ from: user.address, to: pool.address });
+    expect(pool.nextIndex()).toEqual(1);
+    expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
+    expect(pool.pendingWithdrawTon()).toEqual(TEST_TON_DENOM);
+}
+
+get fun `test TonPool deposit surplus cannot mask underfunded reserve`() {
+    val (pool, _) = setupDeployedTonPoolWithValue(ton("0.01"));
+    val user = testing.treasury("user");
+    val userBalBefore = testing.getAccountBalance(user.address);
+
+    val res = pool.sendTonDepositPayload(
+        user.address,
+        1,
+        user.address,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_NEW_ROOT,
+        ZkProof {
+            proofA: (G1Point { raw: fixtureInsertProofA() }).toCell(),
+            proofB: (G2Point { raw: fixtureInsertProofB() }).toCell(),
+            proofC: (G1Point { raw: fixtureInsertProofC() }).toCell(),
+        },
+        { value: TEST_TON_DENOM + MIN_DEPOSIT_VALUE + ton("0.02") },
+    );
+
+    expect(res).toHaveSuccessfulTx({ from: user.address, to: pool.address });
     expect(pool.nextIndex()).toEqual(0);
     expect(pool.relayerReserve()).toEqual(0);
     expect(pool.pendingWithdrawTon()).toEqual(0);
+    val userBalAfter = testing.getAccountBalance(user.address);
+    expect(userBalAfter > userBalBefore - ton("0.1")).toEqual(true);
 }
 
 get fun `test TonPool deposit with valid proof inserts commitment + earmarks`() {
@@ -275,7 +397,7 @@ get fun `test TonPool deposit at exact floor emits NO excess refund`() {
 
 // Tiny-excess (floor + 1 nanoTON) must NOT revert the TonPool deposit. The
 // refund send uses SEND_MODE_IGNORE_ERRORS so a sub-fwd-fee surplus simply
-// drops the dust into the forwardToFactory pot. The deposit commits.
+// drops the dust into the pool rent buffer. The deposit commits.
 get fun `test TonPool deposit floor+1 nanoTON commits normally (refund drops dust safely)`() {
     val (pool, _) = setupDeployedTonPool();
     val user = testing.treasury("user");
@@ -307,7 +429,7 @@ get fun `test TonPool deposit with surplus refunds excess to fromUser`() {
     val user = testing.treasury("user");
     val userBalBefore = testing.getAccountBalance(user.address);
 
-    // Floor is denom + MIN_DEPOSIT_VALUE = 10 + 0.45 = 10.45. Attach 10.55
+    // Floor is denom + MIN_DEPOSIT_VALUE = 10 + 0.32 = 10.32. Attach 10.42
     // (0.10 surplus). The contract must refund that 0.10 to fromUser.
     val surplus = ton("0.10");
     val attached = TEST_TON_DENOM + MIN_DEPOSIT_VALUE + surplus;
@@ -379,6 +501,55 @@ get fun `test TonPool withdraw fails if balance cannot cover pending payout`() {
 
     val res = pool.sendTonWithdraw(
         relayer.address,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveFailedTx({
+        to: pool.address,
+        exitCode: Errors.InsufficientBalance,
+    });
+    expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
+    expect(pool.pendingWithdrawTon()).toEqual(TEST_TON_DENOM);
+}
+
+get fun `test TonPool withdraw succeeds at native solvency threshold with storage slack`() {
+    val targetBalance: coins = POOL_TON_RESERVE + TEST_TON_DENOM + RELAYER_REIMBURSEMENT + 30000000;
+    val pool = setupWithdrawStateTonPoolWithExactBalance(
+        testing.treasury("ton-exact-probe-factory").address,
+        testing.treasury("ton-exact-factory").address,
+        targetBalance + ton("0.01"),
+    );
+
+    val res = pool.sendTonWithdraw(
+        testing.treasury("relayer").address,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveSuccessfulTx({ to: pool.address });
+    expect(pool.relayerReserve()).toEqual(0);
+    expect(pool.pendingWithdrawTon()).toEqual(0);
+}
+
+get fun `test TonPool withdraw fails one nano below native solvency threshold`() {
+    val targetBalance: coins = POOL_TON_RESERVE + TEST_TON_DENOM + RELAYER_REIMBURSEMENT + 30000000;
+    val pool = setupWithdrawStateTonPoolWithExactBalance(
+        testing.treasury("ton-below-probe-factory").address,
+        testing.treasury("ton-below-factory").address,
+        targetBalance - 1,
+    );
+
+    val res = pool.sendTonWithdraw(
+        testing.treasury("relayer").address,
         2,
         FIXTURE_WITHDRAW_ROOT,
         FIXTURE_WITHDRAW_NULLIFIER_HASH,

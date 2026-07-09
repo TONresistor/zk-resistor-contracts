@@ -39,26 +39,39 @@ fun onBouncedMessage(in: InMessageBounced) {
     // deployable again. Identifies the failed pool by in.senderAddress.
     var storage = lazy FactoryStorage.load();
     var registries = storage.registries.load();
+    var createSenders = storage.createSenders.load();
 
     val jettonKeyEntry = registries.poolAddressToKey.get(in.senderAddress);
     if (jettonKeyEntry.isFound) {
         val key = jettonKeyEntry.loadValue();
+        val creatorEntry = createSenders.poolAddressToCreator.get(in.senderAddress);
         registries.poolRegistry.delete(key);
         registries.poolAddressToKey.delete(in.senderAddress);
+        createSenders.poolAddressToCreator.delete(in.senderAddress);
         storage.poolCount = storage.poolCount - 1;
         storage.registries = registries.toCell();
+        storage.createSenders = createSenders.toCell();
         storage.save();
+        if (creatorEntry.isFound) {
+            refundDeployBounce(creatorEntry.loadValue());
+        }
         return;
     }
 
     val tonKeyEntry = registries.tonPoolAddressToKey.get(in.senderAddress);
     if (tonKeyEntry.isFound) {
         val key = tonKeyEntry.loadValue();
+        val creatorEntry = createSenders.tonPoolAddressToCreator.get(in.senderAddress);
         registries.tonPoolRegistry.delete(key);
         registries.tonPoolAddressToKey.delete(in.senderAddress);
+        createSenders.tonPoolAddressToCreator.delete(in.senderAddress);
         storage.tonPoolCount = storage.tonPoolCount - 1;
         storage.registries = registries.toCell();
+        storage.createSenders = createSenders.toCell();
         storage.save();
+        if (creatorEntry.isFound) {
+            refundDeployBounce(creatorEntry.loadValue());
+        }
         return;
     }
     // Unknown bounce: no-op.
@@ -72,12 +85,13 @@ fun onBouncedMessage(in: InMessageBounced) {
 // The caller does NOT supply the wallet — the pool itself queries the master
 // via TEP-89 after deploy, so no caller can poison the binding.
 
-fun handleCreatePool(_sender: address, valueCoins: coins, msg: CreatePool) {
+fun handleCreatePool(sender: address, valueCoins: coins, msg: CreatePool) {
     assert (valueCoins >= MIN_CREATE_POOL_FEE) throw Errors.InsufficientCreatePoolFee;
     assert (msg.denomination > 0) throw Errors.InvalidDenomination;
 
     var storage = lazy FactoryStorage.load();
     var registries = storage.registries.load();
+    var createSenders = storage.createSenders.load();
 
     val registryKey = computeRegistryKey(msg.jettonMaster, msg.denomination);
     assert (!registries.poolRegistry.exists(registryKey)) throw Errors.PoolAlreadyExists;
@@ -95,7 +109,9 @@ fun handleCreatePool(_sender: address, valueCoins: coins, msg: CreatePool) {
     // lets `onBouncedMessage` roll back if the deploy fails.
     registries.poolRegistry.set(registryKey, poolAddress);
     registries.poolAddressToKey.set(poolAddress, registryKey);
+    createSenders.poolAddressToCreator.set(poolAddress, sender);
     storage.registries = registries.toCell();
+    storage.createSenders = createSenders.toCell();
     storage.poolCount = storage.poolCount + 1;
     storage.save();
 
@@ -133,12 +149,13 @@ fun computeTonRegistryKey(denomination: coins): uint256 {
     return beginCell().storeCoins(denomination).endCell().hash();
 }
 
-fun handleCreateTonPool(_sender: address, valueCoins: coins, msg: CreateTonPool) {
+fun handleCreateTonPool(sender: address, valueCoins: coins, msg: CreateTonPool) {
     assert (valueCoins >= MIN_CREATE_POOL_FEE) throw Errors.InsufficientCreatePoolFee;
     assert (isWhitelistedTonDenom(msg.denomination)) throw Errors.InvalidDenomination;
 
     var storage = lazy FactoryStorage.load();
     var registries = storage.registries.load();
+    var createSenders = storage.createSenders.load();
 
     val registryKey = computeTonRegistryKey(msg.denomination);
     assert (!registries.tonPoolRegistry.exists(registryKey)) throw Errors.PoolAlreadyExists;
@@ -153,7 +170,9 @@ fun handleCreateTonPool(_sender: address, valueCoins: coins, msg: CreateTonPool)
 
     registries.tonPoolRegistry.set(registryKey, poolAddress);
     registries.tonPoolAddressToKey.set(poolAddress, registryKey);
+    createSenders.tonPoolAddressToCreator.set(poolAddress, sender);
     storage.registries = registries.toCell();
+    storage.createSenders = createSenders.toCell();
     storage.tonPoolCount = storage.tonPoolCount + 1;
     storage.save();
 
@@ -194,6 +213,15 @@ fun computeRegistryKey(jettonMaster: address, denomination: coins): uint256 {
 fun reserveFactoryRentBudget(totalPools: uint32) {
     val target: coins = FACTORY_TON_RESERVE + REGISTRY_RENT_PER_POOL * totalPools;
     reserveToncoinsOnBalance(target, RESERVE_MODE_AT_MOST);
+}
+
+fun refundDeployBounce(creator: address) {
+    val refund = createMessage({
+        bounce: false,
+        dest: creator,
+        value: 0,
+    });
+    refund.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
 }
 
 // Initial Pool state. MUST match `Storage` byte-for-byte: any divergence
@@ -259,6 +287,10 @@ fun initialRegistries(): Registries {
         tonPoolRegistry: [],
         tonPoolAddressToKey: [],
     };
+}
+
+fun initialCreateSenders(): CreateSenders {
+    return { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
 }
 
 // ============================================================================

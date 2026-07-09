@@ -72,12 +72,14 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
         tonPoolRegistry: [],
         tonPoolAddressToKey: [],
     };
+    val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     val factory = Factory.fromStorage({
         poolCode: build("Pool"),
         tonPoolCode: build("TonPool"),
         poolCount: 0,
         tonPoolCount: 0,
         registries: registries.toCell(),
+        createSenders: createSenders.toCell(),
     });
     val deployRes = factory.deploy(deployer.address, { value: ton("0.2") });
     expect(deployRes).toHaveSuccessfulDeploy({ to: factory.address });
@@ -242,12 +244,14 @@ get fun `test MAINNET-DRY-RUN: TonPool with bad denom rejected at factory`() {
         tonPoolRegistry: [],
         tonPoolAddressToKey: [],
     };
+    val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     val factory = Factory.fromStorage({
         poolCode: build("Pool"),
         tonPoolCode: build("TonPool"),
         poolCount: 0,
         tonPoolCount: 0,
         registries: registries.toCell(),
+        createSenders: createSenders.toCell(),
     });
     expect(
         factory.deploy(deployer.address, { value: ton("0.2") }),

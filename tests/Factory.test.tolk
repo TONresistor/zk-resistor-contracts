@@ -18,12 +18,14 @@ fun freshFactory(): Factory {
         tonPoolRegistry: [],
         tonPoolAddressToKey: [],
     };
+    val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     return Factory.fromStorage({
         poolCode: build("Pool"),
         tonPoolCode: build("TonPool"),
         poolCount: 0,
         tonPoolCount: 0,
         registries: registries.toCell(),
+        createSenders: createSenders.toCell(),
     });
 }
 
@@ -127,14 +129,14 @@ get fun `test createPool with zero denomination is rejected`() {
 }
 
 // ============================================================================
-// CreatePool fee enforcement (0.15 TON floor for both pool types)
+// CreatePool fee enforcement (0.20 TON floor for both pool types)
 // ============================================================================
 
 get fun `test createPool with insufficient fee is rejected`() {
     val (factory, _, user) = setupDeployedFactory();
     val jettonMaster = testing.treasury("usdt-master").address;
 
-    // Below MIN_CREATE_POOL_FEE (0.15 TON).
+    // Below MIN_CREATE_POOL_FEE (0.20 TON).
     val res = factory.sendCreatePool(
         user.address,
         1,
@@ -398,12 +400,60 @@ fun factoryWithGuaranteedBounce(): Factory {
         tonPoolRegistry: [],
         tonPoolAddressToKey: [],
     };
+    val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     return Factory.fromStorage({
         poolCode: build("TonPool"), // intentionally wrong: guarantees bounce
         tonPoolCode: build("TonPool"),
         poolCount: 0,
         tonPoolCount: 0,
         registries: registries.toCell(),
+        createSenders: createSenders.toCell(),
+    });
+}
+
+fun factoryWithLegacyJettonCreateSenderMissing(poolAddress: address): Factory {
+    val key: uint256 = 0xA11CE;
+    var poolRegistry: map<uint256, address> = [];
+    var poolAddressToKey: map<address, uint256> = [];
+    poolRegistry.set(key, poolAddress);
+    poolAddressToKey.set(poolAddress, key);
+    val registries: Registries = {
+        poolRegistry,
+        poolAddressToKey,
+        tonPoolRegistry: [],
+        tonPoolAddressToKey: [],
+    };
+    val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
+    return Factory.fromStorage({
+        poolCode: build("Pool"),
+        tonPoolCode: build("TonPool"),
+        poolCount: 1,
+        tonPoolCount: 0,
+        registries: registries.toCell(),
+        createSenders: createSenders.toCell(),
+    });
+}
+
+fun factoryWithLegacyTonCreateSenderMissing(poolAddress: address): Factory {
+    val key: uint256 = 0xB0B;
+    var tonPoolRegistry: map<uint256, address> = [];
+    var tonPoolAddressToKey: map<address, uint256> = [];
+    tonPoolRegistry.set(key, poolAddress);
+    tonPoolAddressToKey.set(poolAddress, key);
+    val registries: Registries = {
+        poolRegistry: [],
+        poolAddressToKey: [],
+        tonPoolRegistry,
+        tonPoolAddressToKey,
+    };
+    val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
+    return Factory.fromStorage({
+        poolCode: build("Pool"),
+        tonPoolCode: build("TonPool"),
+        poolCount: 0,
+        tonPoolCount: 1,
+        registries: registries.toCell(),
+        createSenders: createSenders.toCell(),
     });
 }
 
@@ -422,7 +472,8 @@ get fun `test factory rolls back registry when jetton pool deploy bounces`() {
     // CreatePool inserts the phantom entry, sends bounceable deploy, the
     // ghost pool throws, the bounce returns to factory.onBouncedMessage,
     // and the rollback runs.
-    factory.sendCreatePool(
+    val userBalBefore = testing.getAccountBalance(user.address);
+    val firstRes = factory.sendCreatePool(
         user.address,
         1,
         jettonMaster,
@@ -431,6 +482,9 @@ get fun `test factory rolls back registry when jetton pool deploy bounces`() {
     );
 
     // Post-rollback state: registry empty, count back to 0.
+    expect(firstRes).toHaveSuccessfulTx({ from: factory.address, to: user.address });
+    val userBalAfter = testing.getAccountBalance(user.address);
+    expect(userBalAfter > userBalBefore - ton("0.2")).toEqual(true);
     expect(factory.poolCount()).toEqual(0);
     expect(factory.poolAddressFor(jettonMaster, denom)).toEqual(null);
 
@@ -448,6 +502,7 @@ get fun `test factory rolls back registry when jetton pool deploy bounces`() {
     // again). Bouncing is fine: what we're proving is "no permanent lock".
     expect(secondRes).toHaveSuccessfulTx({ from: user.address, to: factory.address });
     expect(factory.poolCount()).toEqual(0); // rolled back again
+    expect(factory.poolAddressFor(jettonMaster, denom)).toEqual(null);
 }
 
 get fun `test factory rolls back registry when TON pool deploy bounces`() {
@@ -482,4 +537,96 @@ get fun `test factory rolls back registry when TON pool deploy bounces`() {
 
     expect(factory.tonPoolCount()).toEqual(0);
     expect(factory.tonPoolAddressFor(denom)).toEqual(null);
+    expect(bounceRes.outMessages.size()).toEqual(1);
+    val bounceRefund = (bounceRes.outMessages.atCell(0) as Cell<TlbMessageRelaxedGeneric>).load();
+    expect(bounceRefund.info.dest).toEqual(user.address);
+    expect(bounceRefund.info.value.grams > 0).toEqual(true);
+    expect(bounceRefund.info.bounce).toEqual(false);
+
+    val secondRes = factory.sendCreateTonPool(user.address, 2, denom, { value: ton("1") });
+    expect(secondRes).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    expect(factory.tonPoolCount()).toEqual(1);
+    expect(factory.tonPoolAddressFor(denom)).toEqual(tonPoolAddr);
+}
+
+get fun `test factory rollback tolerates missing legacy jetton creator`() {
+    val poolAddress = testing.treasury("legacy-jetton-pool").address;
+    val factory = factoryWithLegacyJettonCreateSenderMissing(poolAddress);
+    expect(
+        factory.deploy(testing.treasury("legacy-deployer").address, { value: ton("0.5") }),
+    ).toHaveSuccessfulDeploy({ to: factory.address });
+
+    val bouncedMessage = createMessage({
+        bounce: false,
+        dest: factory.address,
+        value: ton("0.01"),
+        body: beginCell().storeUint(0xFFFFFFFF, 32).endCell(),
+    }).bounced();
+
+    val bounceRes = testing.processSingleTraceStep(poolAddress, bouncedMessage);
+
+    expect(factory.poolCount()).toEqual(0);
+    expect(bounceRes.outMessages.size()).toEqual(0);
+}
+
+get fun `test factory rollback tolerates missing legacy TON creator`() {
+    val poolAddress = testing.treasury("legacy-ton-pool").address;
+    val factory = factoryWithLegacyTonCreateSenderMissing(poolAddress);
+    expect(
+        factory.deploy(testing.treasury("legacy-deployer").address, { value: ton("0.5") }),
+    ).toHaveSuccessfulDeploy({ to: factory.address });
+
+    val bouncedMessage = createMessage({
+        bounce: false,
+        dest: factory.address,
+        value: ton("0.01"),
+        body: beginCell().storeUint(0xFFFFFFFF, 32).endCell(),
+    }).bounced();
+
+    val bounceRes = testing.processSingleTraceStep(poolAddress, bouncedMessage);
+
+    expect(factory.tonPoolCount()).toEqual(0);
+    expect(bounceRes.outMessages.size()).toEqual(0);
+}
+
+get fun `test factory ignores unknown bounced sender without changing registries`() {
+    val (factory, _, user) = setupDeployedFactory();
+    val jettonMaster = testing.treasury("known-jm").address;
+    val jettonDenom: coins = 100;
+    val tonDenom: coins = TON_POOL_DENOM_100;
+    val jettonPoolAddr = factory.expectedPoolAddress(jettonMaster, jettonDenom);
+    val tonPoolAddr = factory.expectedTonPoolAddress(tonDenom);
+
+    expect(
+        factory.sendCreatePool(user.address, 1, jettonMaster, jettonDenom, { value: ton("1") }),
+    ).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    expect(
+        factory.sendCreateTonPool(user.address, 2, tonDenom, { value: ton("1") }),
+    ).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+
+    val bouncedMessage = createMessage({
+        bounce: false,
+        dest: factory.address,
+        value: ton("0.01"),
+        body: beginCell().storeUint(0xFFFFFFFF, 32).endCell(),
+    }).bounced();
+    val bounceRes = testing.processSingleTraceStep(
+        testing.treasury("unknown-bounce-sender").address,
+        bouncedMessage,
+    );
+    val description = bounceRes.tx.load().description.load();
+    if (description is TlbTransOrd) {
+        if (description.computePh is TlbTrComputeVm) {
+            expect(description.computePh.success).toEqual(true);
+        } else {
+            expect(false).toEqual(true);
+        }
+    } else {
+        expect(false).toEqual(true);
+    }
+
+    expect(factory.poolCount()).toEqual(1);
+    expect(factory.tonPoolCount()).toEqual(1);
+    expect(factory.poolAddressFor(jettonMaster, jettonDenom)).toEqual(jettonPoolAddr);
+    expect(factory.tonPoolAddressFor(tonDenom)).toEqual(tonPoolAddr);
 }

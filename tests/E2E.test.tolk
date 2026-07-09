@@ -29,11 +29,14 @@ fun fixtureRecipient(): address {
     return address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW);
 }
 
-fun setupPoolWithDeployValue(deployValue: coins): (Pool, Treasury, address) {
+fun setupPoolWithMasterAndDeployValue(
+    jettonMaster: address,
+    deployValue: coins,
+): (Pool, Treasury, address) {
     val deployer = testing.treasury("deployer");
     val jettonWallet = testing.treasury("pool-jw").address;
     val identity: PoolIdentity = {
-        jettonMaster: testing.treasury("jetton-master").address,
+        jettonMaster,
         factory: testing.treasury("factory").address,
         denomination: TEST_DENOMINATION,
     };
@@ -56,8 +59,31 @@ fun setupPoolWithDeployValue(deployValue: coins): (Pool, Treasury, address) {
     return (pool, deployer, jettonWallet);
 }
 
+fun setupPoolWithDeployValue(deployValue: coins): (Pool, Treasury, address) {
+    return setupPoolWithMasterAndDeployValue(
+        testing.treasury("jetton-master").address,
+        deployValue,
+    );
+}
+
 fun setupPool(): (Pool, Treasury, address) {
     return setupPoolWithDeployValue(ton("1"));
+}
+
+fun setupDepositPoolWithExactBalance(
+    probeMaster: address,
+    jettonMaster: address,
+    targetBalance: coins,
+): (Pool, Treasury, address) {
+    val probeDeployValue = targetBalance + ton("0.01");
+    val (probe, _, _) = setupPoolWithMasterAndDeployValue(probeMaster, probeDeployValue);
+    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
+    val (pool, deployer, jettonWallet) = setupPoolWithMasterAndDeployValue(
+        jettonMaster,
+        targetBalance + deployFee,
+    );
+    expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
+    return (pool, deployer, jettonWallet);
 }
 
 fun setupUnderfundedWithdrawPool(): (Pool, Treasury, address) {
@@ -69,10 +95,24 @@ fun setupWithdrawStatePool(
     deployValue: coins,
     useHistoricalRoot: bool,
 ): (Pool, Treasury, address) {
+    return setupWithdrawStatePoolWithMaster(
+        testing.treasury("jetton-master").address,
+        relayerReserve,
+        deployValue,
+        useHistoricalRoot,
+    );
+}
+
+fun setupWithdrawStatePoolWithMaster(
+    jettonMaster: address,
+    relayerReserve: coins,
+    deployValue: coins,
+    useHistoricalRoot: bool,
+): (Pool, Treasury, address) {
     val deployer = testing.treasury("deployer");
     val jettonWallet = testing.treasury("pool-jw").address;
     val identity: PoolIdentity = {
-        jettonMaster: testing.treasury("jetton-master").address,
+        jettonMaster,
         factory: testing.treasury("factory").address,
         denomination: TEST_DENOMINATION,
     };
@@ -96,6 +136,29 @@ fun setupWithdrawStatePool(
     });
     val res = pool.deploy(deployer.address, { value: deployValue });
     expect(res).toHaveSuccessfulDeploy({ to: pool.address });
+    return (pool, deployer, jettonWallet);
+}
+
+fun setupWithdrawStatePoolWithExactBalance(
+    probeMaster: address,
+    jettonMaster: address,
+    targetBalance: coins,
+): (Pool, Treasury, address) {
+    val probeDeployValue = targetBalance + ton("0.01");
+    val (probe, _, _) = setupWithdrawStatePoolWithMaster(
+        probeMaster,
+        RELAYER_REIMBURSEMENT,
+        probeDeployValue,
+        false,
+    );
+    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
+    val (pool, deployer, jettonWallet) = setupWithdrawStatePoolWithMaster(
+        jettonMaster,
+        RELAYER_REIMBURSEMENT,
+        targetBalance + deployFee,
+        false,
+    );
+    expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return (pool, deployer, jettonWallet);
 }
 
@@ -159,7 +222,7 @@ get fun `test real deposit advances root and stores commitment (inline payload)`
     expect(pool.currentRoot()).toEqual(FIXTURE_INSERT_NEW_ROOT);
 }
 
-get fun `test deposit at floor fails if pool reserve is underfunded`() {
+get fun `test deposit at floor refunds if pool reserve is underfunded`() {
     val (pool, _, jettonWallet) = setupPoolWithDeployValue(ton("0.01"));
 
     val res = pool.sendJettonTransferNotification(
@@ -171,10 +234,55 @@ get fun `test deposit at floor fails if pool reserve is underfunded`() {
         { value: MIN_DEPOSIT_VALUE },
     );
 
-    expect(res).toHaveFailedTx({
-        from: jettonWallet,
-        to: pool.address,
-        exitCode: Errors.InsufficientBalance,
+    expect(res).toHaveSuccessfulTx({ from: jettonWallet, to: pool.address });
+    expect(res).toHaveSuccessfulTx({
+        from: pool.address,
+        to: jettonWallet,
+        opcode: OP_JETTON_TRANSFER,
+    });
+    expect(pool.nextIndex()).toEqual(0);
+    expect(pool.relayerReserve()).toEqual(0);
+}
+
+get fun `test deposit succeeds at exact reserve threshold`() {
+    val targetBalance: coins = POOL_TON_RESERVE + RELAYER_REIMBURSEMENT - MIN_DEPOSIT_VALUE;
+    val (pool, _, jettonWallet) = setupDepositPoolWithExactBalance(
+        testing.treasury("deposit-exact-probe-jm").address,
+        testing.treasury("deposit-exact-jm").address,
+        targetBalance,
+    );
+
+    val res = pool.sendJettonTransferNotification(
+        jettonWallet,
+        1,
+        TEST_DENOMINATION,
+        testing.treasury("user").address,
+        buildDepositForwardPayload(),
+        { value: MIN_DEPOSIT_VALUE },
+    );
+
+    expect(res).toHaveSuccessfulTx({ from: jettonWallet, to: pool.address });
+    expect(pool.nextIndex()).toEqual(1);
+    expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
+}
+
+get fun `test deposit surplus cannot mask underfunded reserve`() {
+    val (pool, _, jettonWallet) = setupPoolWithDeployValue(ton("0.01"));
+
+    val res = pool.sendJettonTransferNotification(
+        jettonWallet,
+        1,
+        TEST_DENOMINATION,
+        testing.treasury("user").address,
+        buildDepositForwardPayload(),
+        { value: MIN_DEPOSIT_VALUE + ton("0.02") },
+    );
+
+    expect(res).toHaveSuccessfulTx({ from: jettonWallet, to: pool.address });
+    expect(res).toHaveSuccessfulTx({
+        from: pool.address,
+        to: jettonWallet,
+        opcode: OP_JETTON_TRANSFER,
     });
     expect(pool.nextIndex()).toEqual(0);
     expect(pool.relayerReserve()).toEqual(0);
@@ -242,6 +350,60 @@ get fun `test withdraw fails if pool balance cannot cover reserved payout`() {
 
     val res = pool.sendWithdraw(
         relayer,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveFailedTx({
+        to: pool.address,
+        exitCode: Errors.InsufficientBalance,
+    });
+    expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
+}
+
+get fun `test withdraw succeeds at jetton solvency threshold with storage slack`() {
+    val targetBalance: coins = POOL_TON_RESERVE + RELAYER_REIMBURSEMENT + JETTON_TRANSFER_GAS +
+    30000000;
+    val (pool, _, jettonWallet) = setupWithdrawStatePoolWithExactBalance(
+        testing.treasury("jetton-exact-probe-jm").address,
+        testing.treasury("jetton-exact-jm").address,
+        targetBalance + ton("0.01"),
+    );
+
+    val res = pool.sendWithdraw(
+        testing.treasury("relayer").address,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipient(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveSuccessfulTx({ to: pool.address });
+    expect(res).toHaveSuccessfulTx({
+        from: pool.address,
+        to: jettonWallet,
+        opcode: OP_JETTON_TRANSFER,
+    });
+    expect(pool.relayerReserve()).toEqual(0);
+}
+
+get fun `test withdraw fails one nano below jetton solvency threshold`() {
+    val targetBalance: coins = POOL_TON_RESERVE + RELAYER_REIMBURSEMENT + JETTON_TRANSFER_GAS +
+    30000000;
+    val (pool, _, _) = setupWithdrawStatePoolWithExactBalance(
+        testing.treasury("jetton-below-probe-jm").address,
+        testing.treasury("jetton-below-jm").address,
+        targetBalance - 1,
+    );
+
+    val res = pool.sendWithdraw(
+        testing.treasury("relayer").address,
         2,
         FIXTURE_WITHDRAW_ROOT,
         FIXTURE_WITHDRAW_NULLIFIER_HASH,
@@ -622,7 +784,7 @@ get fun `test deposit at exact floor emits NO excess refund to fromUser`() {
 
 // Tiny-excess (floor + 1 nanoTON) must NOT revert the deposit. The refund
 // send uses SEND_MODE_IGNORE_ERRORS so a sub-fwd-fee surplus simply drops
-// the dust into the forwardToFactory pot. The deposit itself commits
+// the dust into the pool rent buffer. The deposit itself commits
 // normally: tree advances, reserve bumped, no orphaned jettons.
 get fun `test deposit floor+1 nanoTON commits normally (refund drops dust safely)`() {
     val (pool, _, jettonWallet) = setupPool();
@@ -928,7 +1090,8 @@ get fun `test bounced jetton payout can be retried without a second relayer rewa
 
     val authenticatedBounce = testing.processSingleTraceStep(jettonWallet, bouncedMessage);
     expect(pool.isWithdrawalRetryable(2)).toEqual(true);
-    expect(authenticatedBounce.outMessages.size()).toEqual(2);
+    expect(authenticatedBounce.outMessages.size()).toEqual(1);
+    expect(authenticatedBounce.externals.size()).toEqual(0);
     val bounceRefund = (authenticatedBounce
         .outMessages
         .atCell(0) as Cell<TlbMessageRelaxedGeneric>).load();
@@ -973,6 +1136,9 @@ get fun `test bounced jetton payout can be retried without a second relayer rewa
         { value: MIN_WITHDRAW_GAS },
     );
     expect(retry).toHaveSuccessfulTx({ from: retrySender.address, to: pool.address });
+    expect(
+        retry.findExternalOutMessage<WithdrawRetriedEvent>({ from: pool.address }) == null,
+    ).toEqual(true);
     expect(retry).toHaveSuccessfulTx({
         from: pool.address,
         to: jettonWallet,
@@ -1003,6 +1169,15 @@ get fun `test bounced jetton payout can be retried without a second relayer rewa
             { value: MIN_WITHDRAW_GAS },
         ),
     ).toHaveFailedTx({ to: pool.address, exitCode: Errors.WithdrawalNotRetryable });
+
+    val retryBounce = testing.processSingleTraceStep(jettonWallet, bouncedMessage);
+    expect(pool.isWithdrawalRetryable(2)).toEqual(true);
+    expect(retryBounce.outMessages.size()).toEqual(1);
+    val retryBounceRefund = (retryBounce
+        .outMessages
+        .atCell(0) as Cell<TlbMessageRelaxedGeneric>).load();
+    expect(retryBounceRefund.info.dest).toEqual(retrySender.address);
+    expect(retryBounceRefund.info.value.grams > 0).toEqual(true);
 }
 
 // ============================================================================

@@ -48,10 +48,10 @@ const RELAYER_REIMBURSEMENT: coins = 300000000 // 0.30 TON
 // + safety buffer. CreateTonPool has no TEP-89 step but shares the floor.
 const MIN_CREATE_POOL_FEE: coins = 200000000 // 0.20 TON
 
-// Retained by the factory per CreatePool to fund the storage rent of the
-// two registry entries it writes (forward + reverse). Sized for ~12 years
-// at current TON basechain rent rates. Caps the slow-burn registry-bloat
-// griefing surface: a spammer at 0.20 TON / pool funds their own rent.
+// Retained by the factory per CreatePool to fund storage rent for the pool's
+// index entries (forward, reverse, create-sender). Caps the slow-burn
+// registry-bloat griefing surface: a spammer at 0.20 TON / pool funds their
+// own rent.
 const REGISTRY_RENT_PER_POOL: coins = 20000000 // 0.02 TON
 
 // Minimum TON a deposit must attach beyond the denomination. Splits as

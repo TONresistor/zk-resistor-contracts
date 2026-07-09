@@ -52,8 +52,8 @@ struct (0x4b6f0b50) TonWithdraw {
     proof: Cell<ZkProof>
 }
 
-// Event shapes mirror the jetton Pool events so indexers can share ABI.
-
+// Legacy failure-event ABI retained for negative tests; current refund paths
+// do not emit contract-funded failure logs.
 struct (0xdef000) TonDepositRefundedEvent {
     fromUser: address
     amount: coins

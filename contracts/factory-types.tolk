@@ -2,11 +2,13 @@
 // FACTORY STORAGE
 // ============================================================================
 //
-// The factory has no admin and no changeable state beyond the registries.
+// The factory has no admin and no changeable state beyond pool indexes.
 // Forward maps (key -> poolAddress) let off-chain consumers enumerate pools;
 // reverse maps (poolAddress -> key) let onBouncedMessage roll back a failed
-// deploy. The Registries struct lives in a sub-cell so FactoryStorage stays
-// under the 1023-bit / 4-ref main-cell limit.
+// deploy. Create sender maps let the bounce handler refund the create sender;
+// entries are retained for successful pools because TON has no generic deploy
+// success callback. Sub-cells keep FactoryStorage under the 1023-bit / 4-ref
+// main-cell limit.
 
 struct Registries {
     poolRegistry: map<uint256, address>        // hash(jettonMaster, denom) -> jetton pool addr
@@ -15,12 +17,18 @@ struct Registries {
     tonPoolAddressToKey: map<address, uint256> // TonPool addr -> registry key
 }
 
+struct CreateSenders {
+    poolAddressToCreator: map<address, address>    // jetton pool addr -> create sender
+    tonPoolAddressToCreator: map<address, address> // TON pool addr -> create sender
+}
+
 struct FactoryStorage {
     poolCode: cell    // jetton pool code, set at deploy
     tonPoolCode: cell // TON pool code, set at deploy
     poolCount: uint32
     tonPoolCount: uint32
     registries: Cell<Registries>
+    createSenders: Cell<CreateSenders>
 }
 
 fun FactoryStorage.load(): FactoryStorage {

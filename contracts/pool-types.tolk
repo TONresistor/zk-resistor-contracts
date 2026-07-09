@@ -167,21 +167,22 @@ struct (0x717d3a) WithdrawEvent {
     payout: coins
 }
 
-// Reason codes mirror the Errors enum so indexers can attribute the cause.
+// Legacy failure-event ABI retained for negative tests; current refund paths
+// do not emit contract-funded failure logs.
 struct (0xdef000) DepositRefundedEvent {
     fromUser: address
     amount: coins
     reason: uint16
 }
 
-// Emitted when an outgoing JettonTransfer from handleWithdraw bounces.
-// queryId lets indexers correlate with the original WithdrawEvent.
+// Legacy failure-event ABI retained for negative tests; current bounce paths
+// refund remaining bounce gas to the last payer without emitting this log.
 struct (0xdef001) WithdrawBouncedEvent {
     queryId: uint64
 }
 
-// Emitted when a previously bounced payout is re-sent. The same queryId and
-// nullifier remain consumed; retries never release a second relayer reward.
+// Legacy failure-event ABI retained for negative tests; current retry paths do
+// not emit contract-funded retry logs.
 struct (0xdef003) WithdrawRetriedEvent {
     queryId: uint64
     recipient: address
@@ -203,6 +204,11 @@ struct ZkProof {
     proofA: Cell<G1Point>
     proofB: Cell<G2Point>
     proofC: Cell<G1Point>
+}
+
+fun isWellFormedZkProofCell(proofCell: cell): bool {
+    val proofSlice = proofCell.beginParse();
+    return proofSlice.remainingBitsCount() == 0 && proofSlice.remainingRefsCount() == 3;
 }
 
 struct G1Point {

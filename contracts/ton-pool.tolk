@@ -47,17 +47,7 @@ fun onBouncedMessage(_in: InMessageBounced) {
 // DEPOSIT
 // ============================================================================
 
-fun refundDeposit(fromUser: address, amount: coins, reason: int) {
-    val event = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xdef000 },
-        body: TonDepositRefundedEvent {
-            fromUser,
-            amount,
-            reason: reason as uint16,
-        },
-    });
-    event.send(SEND_MODE_REGULAR);
-
+fun refundDeposit(fromUser: address, _amount: coins, _reason: int) {
     // CARRY_ALL_REMAINING_MESSAGE_VALUE forwards the inbound value minus
     // action fees. Paying fees from the pool's own balance would let a
     // spammer drain a freshly-deployed pool by triggering failing deposits.
@@ -89,6 +79,20 @@ fun handleDeposit(_sender: address, valueCoins: coins, msg: TonDepositPayload) {
         return refundDeposit(msg.fromUser, valueCoins, Errors.CommitmentAlreadyExists);
     }
 
+    if (!isWellFormedZkProofCell(msg.insertProof)) {
+        return refundDeposit(msg.fromUser, valueCoins, Errors.InvalidInsertProof);
+    }
+
+    val depositExcess: coins = valueCoins - requiredValue;
+    val newRelayerReserve: coins = storage.relayerReserve + RELAYER_REIMBURSEMENT;
+    val newPendingWithdrawTon: coins = storage.pendingWithdrawTon + identity.denomination;
+    if (
+        contract.getOriginalBalance() - depositExcess <
+        POOL_TON_RESERVE + newRelayerReserve + newPendingWithdrawTon
+    ) {
+        return refundDeposit(msg.fromUser, valueCoins, Errors.InsufficientBalance);
+    }
+
     val proof = msg.insertProof.load();
     val ok = verifyInsertProof(
         merkle.currentRoot,
@@ -105,8 +109,8 @@ fun handleDeposit(_sender: address, valueCoins: coins, msg: TonDepositPayload) {
 
     val leafIndex = merkle.insertCommitment(msg.commitment, msg.newRoot);
     storage.merkle = merkle.toCell();
-    storage.relayerReserve = storage.relayerReserve + RELAYER_REIMBURSEMENT;
-    storage.pendingWithdrawTon = storage.pendingWithdrawTon + identity.denomination;
+    storage.relayerReserve = newRelayerReserve;
+    storage.pendingWithdrawTon = newPendingWithdrawTon;
     storage.save();
 
     val depositEvent = createExternalLogMessage({
@@ -123,7 +127,6 @@ fun handleDeposit(_sender: address, valueCoins: coins, msg: TonDepositPayload) {
     // Refund the user the TON attached beyond requiredValue. IGNORE_ERRORS
     // so dust below the forwarding fee falls back to the pool's rent
     // buffer instead of reverting the whole transaction.
-    val depositExcess: coins = valueCoins - requiredValue;
     if (depositExcess > 0) {
         val refundExcess = createMessage({
             bounce: false,
@@ -132,14 +135,6 @@ fun handleDeposit(_sender: address, valueCoins: coins, msg: TonDepositPayload) {
         });
         refundExcess.send(SEND_MODE_REGULAR | SEND_MODE_IGNORE_ERRORS);
     }
-
-    // Defense-in-depth: the pool must hold POOL_TON_RESERVE plus every
-    // relayer earmark plus every pending TON payout after the deposit
-    // settles.
-    assert (
-        contract.getOriginalBalance() - depositExcess >=
-        POOL_TON_RESERVE + storage.relayerReserve + storage.pendingWithdrawTon
-    ) throw Errors.InsufficientBalance;
 }
 
 // ============================================================================
@@ -185,10 +180,11 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     // Solvency check before committing state: pool must cover the recipient
     // payout, the sender payout, the external event, and all other
     // outstanding earmarks. 0.03 TON action-fee buffer absorbs forwarding
-    // fees plus mainnet congestion headroom. getOriginalBalance() already
-    // includes the credited inbound valueCoins.
+    // fees plus mainnet congestion headroom. The broadcaster's inbound gas
+    // is excluded: it must not fund protocol solvency because the final
+    // reserve/refund path also excludes it.
     val tonRequired: coins = POOL_TON_RESERVE + recipientAmount + RELAYER_REIMBURSEMENT + 30000000;
-    val balanceAvailable: coins = contract.getOriginalBalance();
+    val balanceAvailable: coins = contract.getOriginalBalance() - valueCoins;
     val otherReserves: coins = (storage.relayerReserve - RELAYER_REIMBURSEMENT) +
     (storage.pendingWithdrawTon - identity.denomination);
     assert (balanceAvailable >= tonRequired + otherReserves) throw Errors.InsufficientBalance;

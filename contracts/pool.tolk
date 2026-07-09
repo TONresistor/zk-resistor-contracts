@@ -85,12 +85,6 @@ fun onBouncedMessage(in: InMessageBounced) {
     // SAFETY: only the remaining value of this authenticated bounce is carried;
     // the pool's pre-existing balance is never swept.
     gasRefund.send(SEND_MODE_CARRY_ALL_REMAINING_MESSAGE_VALUE | SEND_MODE_IGNORE_ERRORS);
-
-    val event = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xdef001 },
-        body: WithdrawBouncedEvent { queryId },
-    });
-    event.send(SEND_MODE_IGNORE_ERRORS);
 }
 
 // ============================================================================
@@ -148,11 +142,11 @@ fun handleTakeWalletAddress(sender: address, msg: TakeWalletAddress) {
 // ============================================================================
 
 // Return the deposited jettons to fromUser on any recoverable validation
-// failure in handleDeposit. Emits a refund event for indexers.
+// failure in handleDeposit.
 fun refundDeposit(
     jw: address,
     msg: JettonTransferNotification,
-    reason: int,
+    _reason: int,
 ) {
     // Pass the complete remaining inbound TON value through the pool's jetton
     // wallet. TEP-74 returns the unused part to responseDestination. This
@@ -165,21 +159,6 @@ fun refundDeposit(
         msg.queryId & JETTON_QUERY_ID_MASK,
         msg.fromUser,
     );
-
-    val event = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0xdef000 },
-        body: DepositRefundedEvent {
-            fromUser: msg.fromUser,
-            amount: msg.amount,
-            reason: reason as uint16,
-        },
-    });
-    event.send(SEND_MODE_IGNORE_ERRORS);
-}
-
-fun isWellFormedZkProofCell(proofCell: cell): bool {
-    val proofSlice = proofCell.beginParse();
-    return proofSlice.remainingBitsCount() == 0 && proofSlice.remainingRefsCount() == 3;
 }
 
 fun isWellFormedDepositPayload(payloadSlice: slice): bool {
@@ -277,9 +256,15 @@ fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotific
         return refundDeposit(jw!, msg, Errors.InvalidInsertProof);
     }
 
+    val depositExcess: coins = valueCoins - MIN_DEPOSIT_VALUE;
+    val newRelayerReserve: coins = storage.relayerReserve + RELAYER_REIMBURSEMENT;
+    if (contract.getOriginalBalance() - depositExcess < POOL_TON_RESERVE + newRelayerReserve) {
+        return refundDeposit(jw!, msg, Errors.InsufficientBalance);
+    }
+
     val leafIndex = merkle.insertCommitment(commitment, newRoot);
     storage.merkle = merkle.toCell();
-    storage.relayerReserve = storage.relayerReserve + RELAYER_REIMBURSEMENT;
+    storage.relayerReserve = newRelayerReserve;
     storage.save();
 
     val depositEvent = createExternalLogMessage({
@@ -296,7 +281,6 @@ fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotific
     // Refund the user the TON attached beyond MIN_DEPOSIT_VALUE.
     // IGNORE_ERRORS so dust below the forwarding fee falls back to the
     // pool's rent buffer instead of reverting the whole transaction.
-    val depositExcess: coins = valueCoins - MIN_DEPOSIT_VALUE;
     if (depositExcess > 0) {
         val refundExcess = createMessage({
             bounce: false,
@@ -305,12 +289,6 @@ fun handleDeposit(sender: address, valueCoins: coins, msg: JettonTransferNotific
         });
         refundExcess.send(SEND_MODE_REGULAR | SEND_MODE_IGNORE_ERRORS);
     }
-
-    // Defense-in-depth: the pool must hold POOL_TON_RESERVE plus every
-    // relayer earmark after the deposit settles.
-    assert (
-        contract.getOriginalBalance() - depositExcess >= POOL_TON_RESERVE + storage.relayerReserve
-    ) throw Errors.InsufficientBalance;
 }
 
 // ============================================================================
@@ -367,14 +345,6 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
             sender,
         );
 
-        val retryEvent = createExternalLogMessage({
-            dest: ExtOutLogBucket { topic: 0xdef003 },
-            body: WithdrawRetriedEvent {
-                queryId: msg.queryId,
-                recipient: msg.recipient,
-            },
-        });
-        retryEvent.send(SEND_MODE_IGNORE_ERRORS);
         return;
     }
 
@@ -404,11 +374,12 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
     // Solvency check before committing state: pool must cover the jetton
     // transfer, the sender payout, the external event, and all other
     // outstanding earmarks. 0.03 TON action-fee buffer absorbs forwarding
-    // fees plus mainnet congestion headroom. getOriginalBalance() already
-    // includes the credited inbound valueCoins.
+    // fees plus mainnet congestion headroom. The broadcaster's inbound gas
+    // is excluded: it must not fund protocol solvency because the final
+    // reserve/refund path also excludes it.
     val tonRequired: coins = POOL_TON_RESERVE + RELAYER_REIMBURSEMENT + JETTON_TRANSFER_GAS +
     30000000;
-    val balanceAvailable: coins = contract.getOriginalBalance();
+    val balanceAvailable: coins = contract.getOriginalBalance() - valueCoins;
     val otherReserves: coins = storage.relayerReserve - RELAYER_REIMBURSEMENT;
     assert (balanceAvailable >= tonRequired + otherReserves) throw Errors.InsufficientBalance;
 
