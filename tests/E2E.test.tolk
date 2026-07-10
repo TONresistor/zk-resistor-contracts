@@ -27,10 +27,16 @@ import "@wrappers/Pool.gen"
 
 const TEST_DENOMINATION: coins = 1000
 
-// Reconstruct the fixture's recipient address so the contract's
-// `recipientHash & ADDRESS_FIELD_MASK` matches `FIXTURE_WITHDRAW_RECIPIENT`.
+// Reconstruct the complete address used to derive the fixture's recipient field.
 fun fixtureRecipient(): address {
     return address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW);
+}
+
+fun fixtureRecipientHighByteAlias(): address {
+    return address.fromWorkchainAndHash(
+        0,
+        FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW + (1 << 248),
+    );
 }
 
 fun setupPoolWithMasterAndDeployValue(
@@ -402,6 +408,40 @@ get fun `test real withdraw spends nullifier and pays recipient + sender`() {
     })!;
     val senderPayMsg = senderPayTx.messages.load().inMsg.unwrap().load();
     expect(senderPayMsg.info.bounce).toEqual(false);
+}
+
+get fun `test withdraw rejects recipient with same low 248 bits without consuming nullifier`() {
+    val (pool, _, jettonWallet) = setupPool();
+
+    expect(
+        pool.sendJettonTransferNotification(
+            jettonWallet,
+            1,
+            TEST_DENOMINATION,
+            testing.treasury("recipient-alias-user").address,
+            buildDepositForwardPayload(),
+            { value: ton("0.6") },
+        ),
+    ).toHaveSuccessfulTx({ to: pool.address });
+
+    val nullifierBucket = sparseSetBucketId(FIXTURE_WITHDRAW_NULLIFIER_HASH) as uint8;
+    val res = pool.sendWithdrawWithEmptySparseProof(
+        testing.treasury("recipient-alias-relayer").address,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipientHighByteAlias(),
+        realWithdrawProof(),
+        { value: MIN_JETTON_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveFailedTx({
+        to: pool.address,
+        exitCode: Errors.InvalidWithdrawProof,
+    });
+    expect(pool.withdrawalCount()).toEqual(0);
+    expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
+    expect(pool.sparseRoot(SPARSE_SET_NULLIFIER_DOMAIN, nullifierBucket)).toEqual(0);
 }
 
 get fun `test withdraw fails if pool balance cannot cover reserved payout`() {

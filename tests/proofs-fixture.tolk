@@ -12,42 +12,42 @@ const FIXTURE_INSERT_LEAF_INDEX: uint32 = 0
 
 fun fixtureInsertProofA(): slice {
     return beginCell()
-        .storeUint(188374619861350, 48)
-        .storeUint(142986856939848, 48)
-        .storeUint(216808613410834, 48)
-        .storeUint(259837223913739, 48)
-        .storeUint(164400441602188, 48)
-        .storeUint(262198822943225, 48)
-        .storeUint(164882042145605, 48)
-        .storeUint(116072008581708, 48)
+        .storeUint(158321622149286, 48)
+        .storeUint(119460536844863, 48)
+        .storeUint(114382276431566, 48)
+        .storeUint(150411518135222, 48)
+        .storeUint(75957888509766, 48)
+        .storeUint(24807782419318, 48)
+        .storeUint(10334781632025, 48)
+        .storeUint(53042434660975, 48)
         .endCell()
         .beginParse();
 }
 
 fun fixtureInsertProofB(): slice {
     return beginCell()
-        .storeUint(43054735354714421611206522391, 96)
-        .storeUint(16343265094039397286677933817, 96)
-        .storeUint(26925426492356017221392706026, 96)
-        .storeUint(51767009578501017326994811608, 96)
-        .storeUint(4428122508690594367941135589, 96)
-        .storeUint(23748488124081715942784998984, 96)
-        .storeUint(51742716908930898718293806883, 96)
-        .storeUint(57225977135329598281624119496, 96)
+        .storeUint(47222174495325023275138988565, 96)
+        .storeUint(60434706484331657194099336238, 96)
+        .storeUint(77738879500670142625041114772, 96)
+        .storeUint(57712200014634520748902647171, 96)
+        .storeUint(2957609057543417009476882112, 96)
+        .storeUint(32763725593393767012689519937, 96)
+        .storeUint(70818254537852007857787224009, 96)
+        .storeUint(46676754832610621987793506182, 96)
         .endCell()
         .beginParse();
 }
 
 fun fixtureInsertProofC(): slice {
     return beginCell()
-        .storeUint(198653868567169, 48)
-        .storeUint(266053908849602, 48)
-        .storeUint(105927245217900, 48)
-        .storeUint(90841307949365, 48)
-        .storeUint(154778522929732, 48)
-        .storeUint(234023536254253, 48)
-        .storeUint(151263146486888, 48)
-        .storeUint(82758127365304, 48)
+        .storeUint(165966625199130, 48)
+        .storeUint(105016334167587, 48)
+        .storeUint(17565833396964, 48)
+        .storeUint(175461341589843, 48)
+        .storeUint(174625797306636, 48)
+        .storeUint(32243731124356, 48)
+        .storeUint(177591618568468, 48)
+        .storeUint(268770329660356, 48)
         .endCell()
         .beginParse();
 }
@@ -62,42 +62,42 @@ const FIXTURE_SECOND_INSERT_LEAF_INDEX: uint32 = 1
 
 fun fixtureSecondInsertProofA(): slice {
     return beginCell()
-        .storeUint(192613853385613, 48)
-        .storeUint(208555726155699, 48)
-        .storeUint(44853590835892, 48)
-        .storeUint(71606320504544, 48)
-        .storeUint(128898726040511, 48)
-        .storeUint(240797587128539, 48)
-        .storeUint(244714247031029, 48)
-        .storeUint(104801909877615, 48)
+        .storeUint(180540703208851, 48)
+        .storeUint(45176897154763, 48)
+        .storeUint(165486896461242, 48)
+        .storeUint(139019815352251, 48)
+        .storeUint(274800487628710, 48)
+        .storeUint(102709683069789, 48)
+        .storeUint(94344798750458, 48)
+        .storeUint(209317290383866, 48)
         .endCell()
         .beginParse();
 }
 
 fun fixtureSecondInsertProofB(): slice {
     return beginCell()
-        .storeUint(55591634264088398706862202322, 96)
-        .storeUint(25164344690642248278053607446, 96)
-        .storeUint(52110305693578627956529533344, 96)
-        .storeUint(37692816567420803078884925014, 96)
-        .storeUint(3851607769994882061714415467, 96)
-        .storeUint(2927772693983936263071594056, 96)
-        .storeUint(39448986242384668520589037002, 96)
-        .storeUint(22673962973564909070504173893, 96)
+        .storeUint(45420306678574796145713725369, 96)
+        .storeUint(26196505696991290153640863271, 96)
+        .storeUint(20021741117021355031194876693, 96)
+        .storeUint(58516598081041496556300564997, 96)
+        .storeUint(414642669331648689916146282, 96)
+        .storeUint(73388912705683208051284025418, 96)
+        .storeUint(63216549479648043407063119417, 96)
+        .storeUint(8317670361336260039337024378, 96)
         .endCell()
         .beginParse();
 }
 
 fun fixtureSecondInsertProofC(): slice {
     return beginCell()
-        .storeUint(168703295177756, 48)
-        .storeUint(204598415093602, 48)
-        .storeUint(56224818286085, 48)
-        .storeUint(255709978726305, 48)
-        .storeUint(110204080539586, 48)
-        .storeUint(162325274884743, 48)
-        .storeUint(101533731379209, 48)
-        .storeUint(216259949817558, 48)
+        .storeUint(203889061291614, 48)
+        .storeUint(120843129988091, 48)
+        .storeUint(172600981074433, 48)
+        .storeUint(205623972071318, 48)
+        .storeUint(94587460751418, 48)
+        .storeUint(124761317059204, 48)
+        .storeUint(251654892934983, 48)
+        .storeUint(59024763029927, 48)
         .endCell()
         .beginParse();
 }
@@ -107,52 +107,52 @@ fun fixtureSecondInsertProofC(): slice {
 // =========================================================
 const FIXTURE_WITHDRAW_ROOT: uint256 = 43515644044378706072201279701593924060404973014210971961542087297792024379934
 const FIXTURE_WITHDRAW_NULLIFIER_HASH: uint256 = 12614779548715232705700023865184388752852630258570386389948255252041635551637
-// recipientField = lower 248 bits of the address hash, matching
-// frontend/src/lib/note.ts:addressToField and the contract's derivation.
+// recipientField = low248(Cell(domain, workchain, full address hash).hash()),
+// matching the SDK and contracts/recipient-binding.tolk.
 // The full raw hash is exposed so tests can reconstruct the address via
 // address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW).
 // Friendly form: EQB8PZ-Cp6UzydbLvjukx1OQL3LmqeYV-tJ3qVMw_mNYgqow
 const FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW: uint256 = 0x7c3d9f82a7a533c9d6cbbe3ba4c753902f72e6a9e615fad277a95330fe635882
-const FIXTURE_WITHDRAW_RECIPIENT: uint256 = 108878571068800865772991973165966069721936301355508533952735846591564568706
+const FIXTURE_WITHDRAW_RECIPIENT: uint256 = 393177122762964703695196384100269948306896490108633523758167178602854112002
 
 fun fixtureWithdrawProofA(): slice {
     return beginCell()
-        .storeUint(158977830916625, 48)
-        .storeUint(121956419440043, 48)
-        .storeUint(14785272715007, 48)
-        .storeUint(237954918538756, 48)
-        .storeUint(156570916494883, 48)
-        .storeUint(146237234502831, 48)
-        .storeUint(218860132126566, 48)
-        .storeUint(159846022731547, 48)
+        .storeUint(179435497791003, 48)
+        .storeUint(181672982858349, 48)
+        .storeUint(227083503691271, 48)
+        .storeUint(149055488942163, 48)
+        .storeUint(133516161090227, 48)
+        .storeUint(146964994348283, 48)
+        .storeUint(175361443629586, 48)
+        .storeUint(183770515727991, 48)
         .endCell()
         .beginParse();
 }
 
 fun fixtureWithdrawProofB(): slice {
     return beginCell()
-        .storeUint(46490547138824129664373813249, 96)
-        .storeUint(4084135093221368005056599884, 96)
-        .storeUint(65843426472407108577284526387, 96)
-        .storeUint(27575125959420336872827478806, 96)
-        .storeUint(4385612015112138313685258000, 96)
-        .storeUint(45014794787880396561292156447, 96)
-        .storeUint(28980540144385543362438348758, 96)
-        .storeUint(16641073500186273107245039539, 96)
+        .storeUint(44188110530370033922908702425, 96)
+        .storeUint(17283952061872523335468657955, 96)
+        .storeUint(36328881379722927507273974776, 96)
+        .storeUint(44030942915053355993136326999, 96)
+        .storeUint(7886113716324736162394246428, 96)
+        .storeUint(53772122971860457952886298965, 96)
+        .storeUint(32857233349985688472108136760, 96)
+        .storeUint(15456666371944547881230328230, 96)
         .endCell()
         .beginParse();
 }
 
 fun fixtureWithdrawProofC(): slice {
     return beginCell()
-        .storeUint(143738559577170, 48)
-        .storeUint(37847655968930, 48)
-        .storeUint(66765340970906, 48)
-        .storeUint(109718406011409, 48)
-        .storeUint(242447570996027, 48)
-        .storeUint(191739296162301, 48)
-        .storeUint(272642082082182, 48)
-        .storeUint(133963024366226, 48)
+        .storeUint(141963816932016, 48)
+        .storeUint(225510420907731, 48)
+        .storeUint(279149338231854, 48)
+        .storeUint(100019366433742, 48)
+        .storeUint(34144860389558, 48)
+        .storeUint(119180422387437, 48)
+        .storeUint(105008163025286, 48)
+        .storeUint(50103635825482, 48)
         .endCell()
         .beginParse();
 }

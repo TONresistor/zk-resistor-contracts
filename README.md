@@ -138,18 +138,23 @@ Constraints: `insert` 25,105, `withdraw` 14,537, `hasher` 624.
 ### Address-to-field encoding
 
 ```
-recipientField = address.getWorkchainAndHash().1 & ((1 << 248) - 1)
+recipientField = low248(
+  Cell(0x5a4b5201, int32(workchain), uint256(accountHash)).hash()
+)
 ```
 
-Mirrored on-chain and off-chain. 248 bits fit inside the BLS12-381 Fr field.
+The complete canonical address is domain-hashed before truncation, so changing
+any address bit invalidates the proof. The Tolk contracts and SDK mirror the
+same 320-bit, zero-reference cell encoding. The final 248-bit value fits inside
+the BLS12-381 Fr field.
 
 ### Current build hashes
 
 | Contract | Code hash |
 |---|---|
 | Factory | `199ab5112f96f7f390522f9b8c5df5429f3f3e037409b8bfad7648b954f2ec8f` |
-| Pool | `caca8420450e7ae086462cdd7ce32fcbb1c5650151f1606003515b598bcc26db` |
-| TonPool | `057bf7a3006b61bdcc8b77b1264f3b473ff2fec0181de478059eb0d40ecd9d78` |
+| Pool | `51cd5b3ec01beb28a843d30ecf60ea998d1107342a214969ae72047f1eb82dec` |
+| TonPool | `fde119db0060a01c0a00adc307ec98a2bf5b734ca7ef45e886c9ca2cce642aa3` |
 
 Reproduce with `jq -r .hash build/*.json` from a clean build.
 

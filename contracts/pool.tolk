@@ -3,6 +3,7 @@ import "constants"
 import "deployment-types"
 import "errors"
 import "pool-types"
+import "recipient-binding"
 import "sparse-set"
 import "verifier-insert"
 import "verifier-withdraw"
@@ -448,17 +449,6 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: Withdraw) {
     // SAFETY: reserveToncoinsOnBalance pins the pool buffer and every remaining
     // relayer earmark before only the current withdrawal's surplus is carried.
     senderPay.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
-}
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-fun recipientToField(recipient: address): uint256 {
-    val (workchain, recipientHash) = recipient.getWorkchainAndHash();
-    assert (workchain == 0) throw Errors.InvalidRecipient;
-    assert (recipientHash != 0) throw Errors.InvalidRecipient;
-    return recipientHash & ADDRESS_FIELD_MASK;
 }
 
 fun sendJettonPayout(

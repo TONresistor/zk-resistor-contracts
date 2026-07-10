@@ -21,6 +21,13 @@ fun fixtureRecipient(): address {
     return address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW);
 }
 
+fun fixtureRecipientHighByteAlias(): address {
+    return address.fromWorkchainAndHash(
+        0,
+        FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW + (1 << 248),
+    );
+}
+
 fun freshTonPoolWithFactory(factoryAddr: address): TonPool {
     val identity: TonPoolIdentity = { factory: factoryAddr, denomination: TEST_TON_DENOM };
     val merkle: MerkleState = {
@@ -1494,6 +1501,30 @@ get fun `test TonPool recipient swap is rejected`() {
     // Nullifier NOT consumed.
     expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
     expect(pool.pendingWithdrawTon()).toEqual(TEST_TON_DENOM);
+}
+
+get fun `test TonPool rejects recipient with same low 248 bits without consuming nullifier`() {
+    val pool = fundedTonPool();
+    val nullifierBucket = sparseSetBucketId(FIXTURE_WITHDRAW_NULLIFIER_HASH) as uint8;
+
+    val res = pool.sendTonWithdrawWithEmptySparseProof(
+        testing.treasury("ton-recipient-alias-relayer").address,
+        2,
+        FIXTURE_WITHDRAW_ROOT,
+        FIXTURE_WITHDRAW_NULLIFIER_HASH,
+        fixtureRecipientHighByteAlias(),
+        realWithdrawProof(),
+        { value: MIN_WITHDRAW_GAS },
+    );
+
+    expect(res).toHaveFailedTx({
+        to: pool.address,
+        exitCode: Errors.InvalidWithdrawProof,
+    });
+    expect(pool.withdrawalCount()).toEqual(0);
+    expect(pool.relayerReserve()).toEqual(RELAYER_REIMBURSEMENT);
+    expect(pool.pendingWithdrawTon()).toEqual(TEST_TON_DENOM);
+    expect(pool.sparseRoot(SPARSE_SET_NULLIFIER_DOMAIN, nullifierBucket)).toEqual(0);
 }
 
 get fun `test TonPool withdraw rejects malformed raw proof points`() {

@@ -1,7 +1,10 @@
-// Lower 248 bits of an address hash, used as the field-element binding for
-// the recipient in the withdraw circuit. 248 bits fit safely inside the
-// BLS12-381 Fr field (255 bits) and match the frontend's encoding.
+// A recipient's full canonical address is domain-hashed before this mask is
+// applied. 248 bits fit safely inside the BLS12-381 Fr field (255 bits).
 const ADDRESS_FIELD_MASK: uint256 = (1 << 248) - 1
+
+// Domain for the full-address recipient binding:
+// Cell(uint32 domain, int32 workchain, uint256 accountHash).hash().
+const RECIPIENT_FIELD_DOMAIN: uint32 = 0x5a4b5201
 
 // BLS12-381 scalar field order `r`. Any uint256 public input passed to the
 // verifier MUST be < r: otherwise `x` and `x + r` reduce to the same scalar

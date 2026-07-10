@@ -25,6 +25,7 @@
     "snarkjs": "0.7.6"
   },
   "devDependencies": {
+    "@ton/core": "0.63.0",
     "circom_tester": "0.0.20"
   },
   "overrides": {

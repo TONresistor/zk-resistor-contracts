@@ -28,7 +28,7 @@ For random 248-bit values `nullifier` and `secret`:
 ```text
 commitment    = Poseidon(nullifier, secret)
 nullifierHash = Poseidon(nullifier, 0)
-recipientField = recipient.addressHash & ((1 << 248) - 1)
+recipientField = low248(Cell(0x5a4b5201, int32(workchain), uint256(addressHash)).hash())
 ```
 
 Each Pool maintains a depth-20 Poseidon Merkle tree with exactly `2^20`, or
@@ -55,8 +55,11 @@ empty leaf. The withdrawal proof proves its Merkle membership and the
 Groth16 proofs use BLS12-381 and are verified on-chain. All public field values
 must be canonical scalars. Proof cells must contain ordinary, exact-size G1/G2
 points with no trailing data; identity and out-of-subgroup points are rejected.
-The recipient must be a non-zero workchain-0 address. Its proof binding covers
-the lower 248 bits shown above, not a byte-for-byte 256-bit address hash.
+The recipient must be a non-zero workchain-0 address. The contract derives the
+field from the complete canonical address before proof verification. Changing
+any workchain or account-hash bit therefore changes the proof input; finding an
+alternative address with the same field requires a second preimage of the
+domain-separated 248-bit binding hash.
 
 Pools retain a circular history of 100 roots in total, including the current
 root. After saturation, this is the current root and 99 previous roots. A
@@ -195,16 +198,23 @@ rely on the selected master and wallet conforming to TEP-74 and TEP-89.
 
 ## 7. Accounting
 
-| Operation | Minimum attached value |
-|---|---:|
-| Create Jetton Pool | `0.45 TON` |
-| Create TonPool | `0.45 TON` |
-| Jetton wallet-binding trigger while unbound | `0.06 TON` |
-| Jetton trigger once bound / TonPool confirmation | `0.02 TON` |
-| Jetton deposit forwarding | `0.37 TON` |
-| TON deposit overhead | `0.37 TON` plus denomination |
-| Jetton withdrawal | `0.25 TON` |
-| TON withdrawal | `0.10 TON` |
+| Operation                                        |       Minimum attached value |     |
+| ------------------------------------------------ | ---------------------------: | --- |
+| Create Jetton Pool                               |                   `0.45 TON` |     |
+| Create TonPool                                   |                   `0.45 TON` |     |
+| Jetton wallet-binding trigger while unbound      |                   `0.06 TON` |     |
+| Jetton trigger once bound / TonPool confirmation |                   `0.02 TON` |     |
+| Jetton deposit forwarding                        |                   `0.37 TON` |     |
+| SDK Jetton deposit outer attachment              |                   `0.65 TON` |     |
+| TON deposit overhead                             | `0.37 TON` plus denomination |     |
+| Jetton withdrawal                                |                   `0.25 TON` |     |
+| TON withdrawal                                   |                   `0.10 TON` |     |
+
+For a Jetton deposit, `0.37 TON` is the amount forwarded to the Pool. The SDK
+attaches `0.65 TON` to the user's Jetton Wallet so the transfer can cross both
+Jetton Wallet hops. The unused part of that outer headroom is returned to the
+user through the standard TEP-74 excess path; it is not a `0.65 TON` protocol
+fee.
 
 Factory reserves `0.37 TON` plus `0.02 TON` per registered Pool and retains
 `0.04 TON` from each create message for the new registry entry and actions. It

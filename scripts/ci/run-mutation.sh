@@ -16,7 +16,7 @@ fi
 
 run_mutation() {
   local contract="$1"
-  local source="$2"
+  local sources_csv="$2"
   local manifest="${3:-$ROOT/Acton.toml}"
   local test_path="${4:-}"
   local log="$OUT_DIR/mutation-${contract}.log"
@@ -50,14 +50,22 @@ run_mutation() {
     echo "::error::Could not identify ${contract} mutation session"
     exit 1
   fi
-  node "$ROOT/scripts/ci/check-mutation-source.mjs" \
-    --session "$ROOT/build/mutation-sessions/${session_id}.jsonl" \
-    --contract "$contract" \
-    --source "$source" \
-    --waivers "$ROOT/scripts/ci/mutation-waivers.json"
+  local sources
+  IFS=',' read -r -a sources <<< "$sources_csv"
+  for source in "${sources[@]}"; do
+    node "$ROOT/scripts/ci/check-mutation-source.mjs" \
+      --session "$ROOT/build/mutation-sessions/${session_id}.jsonl" \
+      --contract "$contract" \
+      --source "$source" \
+      --waivers "$ROOT/scripts/ci/mutation-waivers.json"
+  done
 }
 
-run_mutation "Pool" "contracts/pool.tolk" "$ROOT/Acton.toml" "$ROOT/tests"
+run_mutation \
+  "Pool" \
+  "contracts/pool.tolk,contracts/recipient-binding.tolk" \
+  "$ROOT/Acton.toml" \
+  "$ROOT/tests"
 run_mutation "TonPool" "contracts/ton-pool.tolk" "$ROOT/Acton.toml" "$ROOT/tests"
 run_mutation "Factory" "contracts/factory.tolk" "$ROOT/Acton.toml" "$ROOT/tests"
 

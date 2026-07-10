@@ -2,6 +2,7 @@ import "constants"
 import "deployment-types"
 import "errors"
 import "pool-types" // MerkleState helpers (shared)
+import "recipient-binding"
 import "sparse-set"
 import "ton-pool-types"
 import "verifier-insert"
@@ -196,13 +197,9 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     val identity = storage.identity.load();
     var merkle = storage.merkle.load();
 
-    // Derive the field the proof is bound to from msg.recipient. Reject
-    // malformed shapes (non-basechain, hash=0) so we never burn a nullifier
-    // without a payable destination.
-    val (workchain, recipientHash) = msg.recipient.getWorkchainAndHash();
-    assert (workchain == 0) throw Errors.InvalidRecipient;
-    assert (recipientHash != 0) throw Errors.InvalidRecipient;
-    val recipientField: uint256 = recipientHash & ADDRESS_FIELD_MASK;
+    // Domain-hash the complete canonical address before proof verification so
+    // changing any address bit invalidates the proof before state is written.
+    val recipientField = recipientToField(msg.recipient);
 
     assert (merkle.isKnownRoot(msg.root)) throw Errors.UnknownRoot;
     val nullifierUpdate = merkle.prepareSparseSetUpdate(

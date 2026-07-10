@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { Address, beginCell } from "@ton/core";
 import * as snarkjs from "snarkjs";
 import { g1ToChunks, g2ToChunks } from "./bls-encode.js";
 
@@ -58,16 +59,22 @@ const nullifier = 0xa1b2c3d4n;
 const secret = 0x1234567890abn;
 const commitment = BigInt(await poseidon2(nullifier, secret));
 
-// Recipient: a real mainnet address (admin/1312.ton owner) so the on-chain
-// test can pass `address("EQB8PZ-...")` directly as `msg.recipient`, and the
-// contract's derivation of recipientField from the address hash matches the
-// FIXTURE_WITHDRAW_RECIPIENT value the proof commits to.
-//
-// recipientField = lower 248 bits of hash (matches frontend/src/lib/note.ts:addressToField).
+// Recipient: a real mainnet basechain address. The proof public input is the
+// lower 248 bits of a domain-separated representation hash over the complete
+// canonical address, matching contracts/recipient-binding.tolk and the SDK.
 const RECIPIENT_ADDR = "EQB8PZ-Cp6UzydbLvjukx1OQL3LmqeYV-tJ3qVMw_mNYgqow";
-const RECIPIENT_HASH_HEX = "7c3d9f82a7a533c9d6cbbe3ba4c753902f72e6a9e615fad277a95330fe635882";
+const RECIPIENT_FIELD_DOMAIN = 0x5a4b5201;
 const FIELD_MASK_248 = (1n << 248n) - 1n;
-const recipient = BigInt("0x" + RECIPIENT_HASH_HEX) & FIELD_MASK_248;
+const recipientAddress = Address.parse(RECIPIENT_ADDR);
+const RECIPIENT_HASH_HEX = recipientAddress.hash.toString("hex");
+const recipientBindingHash = beginCell()
+    .storeUint(RECIPIENT_FIELD_DOMAIN, 32)
+    .storeInt(recipientAddress.workChain, 32)
+    .storeBuffer(recipientAddress.hash)
+    .endCell()
+    .hash();
+const recipient = BigInt(`0x${recipientBindingHash.toString("hex")}`) & FIELD_MASK_248;
+if (recipient === 0n) throw new Error("recipient binding field must be non-zero");
 
 // --- INSERT proof: empty tree → insert `commitment` at leaf 0 ---
 const insertW = await insertWitness([], commitment, 0);
@@ -166,8 +173,8 @@ const lines = [
     `// =========================================================`,
     `const FIXTURE_WITHDRAW_ROOT: uint256 = ${ww.root}`,
     `const FIXTURE_WITHDRAW_NULLIFIER_HASH: uint256 = ${ww.nullifierHash}`,
-    `// recipientField = lower 248 bits of the address hash, matching`,
-    `// frontend/src/lib/note.ts:addressToField and the contract's derivation.`,
+    `// recipientField = low248(Cell(domain, workchain, full address hash).hash()),`,
+    `// matching the SDK and contracts/recipient-binding.tolk.`,
     `// The full raw hash is exposed so tests can reconstruct the address via`,
     `// address.fromWorkchainAndHash(0, FIXTURE_WITHDRAW_RECIPIENT_HASH_RAW).`,
     `// Friendly form: ${RECIPIENT_ADDR}`,
