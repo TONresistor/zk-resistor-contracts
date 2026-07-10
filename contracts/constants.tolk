@@ -29,8 +29,8 @@ const ROOT_HISTORY_SIZE: int = 100
 const MIN_WITHDRAW_GAS: coins = 100000000 // 0.10 TON
 
 // Factory base runway: more than twice the measured ten-year storage cost of
-// the empty v2 Factory StateInit (0.362488844 TON at the release config).
-const POOL_TON_RESERVE: coins = 50000000 // legacy compatibility; v2 uses poolRentRunway()
+// the empty final Factory StateInit (0.362488844 TON at the release config).
+const POOL_TON_RESERVE: coins = 50000000 // compatibility floor; deposits use poolRentRunway()
 const FACTORY_TON_RESERVE: coins = 370000000 // 0.37 TON
 
 // Each deposit earmarks this amount into the pool's relayerReserve; the

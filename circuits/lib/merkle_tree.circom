@@ -27,9 +27,9 @@ template Poseidon2() {
 // MerkleProof: proves `root = MerkleRoot(leaf, leafIndex, path)`
 // ============================================================================
 //
-// `levels` is the tree depth (20 for v2). At each level we hash the running
-// node with the appropriate sibling, picking left/right by the bit at the
-// matching position of `leafIndex`.
+// `levels` is the tree depth (20 for the final circuits). At each level we hash
+// the running node with the appropriate sibling, picking left/right by the bit
+// at the matching position of `leafIndex`.
 
 template MerkleProof(levels) {
     signal input leaf;

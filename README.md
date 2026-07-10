@@ -6,10 +6,10 @@
 
 Deposit `N` units of an asset into a pool with a commitment `c = Poseidon(nullifier, secret)`. Save the note `(asset, denomination, leafIndex, nullifier, secret)` locally. Later, anyone produces a Groth16 proof of knowledge of `(nullifier, secret)` and a recipient address. The pool verifies the proof, marks the nullifier spent, and pays the recipient the full denomination. The proof reveals nothing about which deposit is spent.
 
-Each pool has exactly 1,048,576 deposit slots at Merkle depth 20. The v2
-contracts keep this capacity effective on-chain: duplicate commitments and spent
-nullifiers use two bounded 256-bucket transparent sparse sets instead of one
-dictionary entry per note. All pools are immutable after deploy.
+Each pool has exactly 1,048,576 deposit slots at Merkle depth 20. The final
+contracts keep this capacity effective on-chain: duplicate commitments and
+spent nullifiers use two bounded 256-bucket transparent sparse sets instead of
+one dictionary entry per note. All pools are immutable after deploy.
 
 ## Contracts
 
@@ -173,13 +173,19 @@ Committed VK JSON hashes:
 | `circuits/vk/insert_vk.json` | `a2667f9d360cdb91aeeb5c1fb19e0312ea0dea5c9f7902d5e6ebec21bbfb4b71` |
 | `circuits/vk/withdraw_vk.json` | `54eaba78d2b47bd01aaeaa3a2a687565e1e641ba7d87e8e9eb4385e3d377c3e6` |
 
-### Test deployment
+### Mainnet deployments
 
 The current public mainnet deployment is the older pre-ceremony test contract.
-It remains live until a separately approved v2 production cutover.
+It remains live until a separately approved production cutover.
 
-- Factory: [`EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu`](https://tonviewer.com/EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu)
+- Public test Factory: [`EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu`](https://tonviewer.com/EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu)
 - Frontend: [zk.resistance.dog](https://zk.resistance.dog)
+
+The finalized post-ceremony contracts are deployed separately on mainnet as a
+shadow validation environment. This deployment is not the public production
+cutover.
+
+- Shadow Factory: [`EQBQanbCeKIwfK2iXGGG0NFusqYKBbamyhiS_JVUR-BtkJyh`](https://tonviewer.com/EQBQanbCeKIwfK2iXGGG0NFusqYKBbamyhiS_JVUR-BtkJyh)
 
 ## License
 

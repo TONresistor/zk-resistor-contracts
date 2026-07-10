@@ -4,7 +4,7 @@
 //   G1 = [x, y, "1"]              (decimal strings, affine coords)
 //   G2 = [[x0, x1], [y0, y1], ["1", "0"]]
 //
-// TVM (and v1 mixer.fc) consumes points as BLST compressed bytes packed
+// TVM consumes points as BLST compressed bytes packed
 // into 48-bit (G1) or 96-bit (G2) chunks in a Cell. We convert here.
 
 import { bls12_381 as bls } from "@noble/curves/bls12-381.js";
