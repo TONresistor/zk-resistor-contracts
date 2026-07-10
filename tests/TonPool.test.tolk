@@ -10,6 +10,7 @@ import "@contracts/errors"
 import "@contracts/pool-types"
 import "@contracts/sparse-set"
 import "@contracts/ton-pool-types"
+import "@tests/account-balance-helpers"
 import "@tests/proofs-fixture"
 import "@tests/ton-pool-sparse-helpers"
 import "@wrappers/TonPool.gen"
@@ -105,15 +106,14 @@ fun setupDeployedTonPool(): (TonPool, Treasury) {
 }
 
 fun setupDepositTonPoolWithExactBalance(
-    probeFactory: address,
     factoryAddr: address,
     targetBalance: coins,
 ): TonPool {
-    testing.setNow(testing.getNow());
-    val probeDeployValue = targetBalance + ton("0.01");
-    val (probe, _) = setupDeployedTonPoolWithFactoryAndValue(probeFactory, probeDeployValue);
-    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
-    val (pool, _) = setupDeployedTonPoolWithFactoryAndValue(factoryAddr, targetBalance + deployFee);
+    val (pool, _) = setupDeployedTonPoolWithFactoryAndValue(
+        factoryAddr,
+        targetBalance + ton("0.1"),
+    );
+    setExactTestAccountBalance(pool.address, targetBalance);
     expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return pool;
 }
@@ -218,55 +218,35 @@ fun setupWithdrawStateTonPoolWithRootHistory(
 }
 
 fun setupWithdrawStateTonPoolWithExactBalance(
-    probeFactory: address,
     factoryAddr: address,
     targetBalance: coins,
 ): TonPool {
-    testing.setNow(testing.getNow());
-    val probeDeployValue = targetBalance + ton("0.01");
-    val probe = setupWithdrawStateTonPoolWithFactory(
-        probeFactory,
-        RELAYER_REIMBURSEMENT,
-        TEST_TON_DENOM,
-        probeDeployValue,
-        false,
-    );
-    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
     val pool = setupWithdrawStateTonPoolWithFactory(
         factoryAddr,
         RELAYER_REIMBURSEMENT,
         TEST_TON_DENOM,
-        targetBalance + deployFee,
+        targetBalance + ton("0.1"),
         false,
     );
+    setExactTestAccountBalance(pool.address, targetBalance);
     expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return pool;
 }
 
 fun setupWithdrawStateTonPoolWithReservesAndExactBalance(
-    probeFactory: address,
     factoryAddr: address,
     relayerReserve: coins,
     pendingWithdrawTon: coins,
     targetBalance: coins,
 ): TonPool {
-    testing.setNow(testing.getNow());
-    val probeDeployValue = targetBalance + ton("0.01");
-    val probe = setupWithdrawStateTonPoolWithFactory(
-        probeFactory,
-        relayerReserve,
-        pendingWithdrawTon,
-        probeDeployValue,
-        false,
-    );
-    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
     val pool = setupWithdrawStateTonPoolWithFactory(
         factoryAddr,
         relayerReserve,
         pendingWithdrawTon,
-        targetBalance + deployFee,
+        targetBalance + ton("0.1"),
         false,
     );
+    setExactTestAccountBalance(pool.address, targetBalance);
     expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return pool;
 }
@@ -627,7 +607,6 @@ get fun `test TonPool deposit succeeds at exact reserve threshold`() {
     // and MIN_DEPOSIT_VALUE, so only the missing runway stays pre-funded.
     val targetBalance = firstTonDepositBalanceThreshold();
     val pool = setupDepositTonPoolWithExactBalance(
-        testing.treasury("ton-deposit-exact-probe-factory").address,
         testing.treasury("ton-deposit-exact-factory").address,
         targetBalance,
     );
@@ -647,7 +626,6 @@ get fun `test TonPool deposit succeeds at exact reserve threshold`() {
 
 get fun `test TonPool deposit rejects one nano below reserve threshold`() {
     val pool = setupDepositTonPoolWithExactBalance(
-        testing.treasury("ton-deposit-below-probe-factory").address,
         testing.treasury("ton-deposit-below-factory").address,
         firstTonDepositBalanceThreshold() - 1,
     );
@@ -661,7 +639,6 @@ get fun `test TonPool deposit rejects one nano below reserve threshold`() {
 
 get fun `test TonPool deposit excess cannot cross a one-nano reserve deficit`() {
     val pool = setupDepositTonPoolWithExactBalance(
-        testing.treasury("ton-deposit-excess-edge-probe-factory").address,
         testing.treasury("ton-deposit-excess-edge-factory").address,
         firstTonDepositBalanceThreshold() - 1,
     );
@@ -1088,7 +1065,6 @@ get fun `test TonPool withdraw succeeds at native solvency threshold`() {
     TEST_TON_DENOM +
     RELAYER_REIMBURSEMENT;
     val pool = setupWithdrawStateTonPoolWithExactBalance(
-        testing.treasury("ton-exact-probe-factory").address,
         testing.treasury("ton-exact-factory").address,
         targetBalance,
     );
@@ -1191,7 +1167,6 @@ get fun `test TonPool withdraw fails one nano below native solvency threshold`()
     TEST_TON_DENOM +
     RELAYER_REIMBURSEMENT;
     val pool = setupWithdrawStateTonPoolWithExactBalance(
-        testing.treasury("ton-below-probe-factory").address,
         testing.treasury("ton-below-factory").address,
         targetBalance - 1,
     );
@@ -1221,7 +1196,6 @@ get fun `test TonPool withdraw succeeds at native threshold with second pending 
     relayerReserve +
     pendingWithdrawTon;
     val pool = setupWithdrawStateTonPoolWithReservesAndExactBalance(
-        testing.treasury("ton-two-reserve-exact-probe-factory").address,
         testing.treasury("ton-two-reserve-exact-factory").address,
         relayerReserve,
         pendingWithdrawTon,
@@ -1250,7 +1224,6 @@ get fun `test TonPool withdraw fails one nano below threshold with second pendin
     relayerReserve +
     pendingWithdrawTon;
     val pool = setupWithdrawStateTonPoolWithReservesAndExactBalance(
-        testing.treasury("ton-two-reserve-below-probe-factory").address,
         testing.treasury("ton-two-reserve-below-factory").address,
         relayerReserve,
         pendingWithdrawTon,

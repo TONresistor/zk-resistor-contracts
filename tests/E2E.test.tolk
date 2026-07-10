@@ -8,6 +8,7 @@ import "@contracts/constants"
 import "@contracts/errors"
 import "@contracts/pool-types"
 import "@contracts/sparse-set"
+import "@tests/account-balance-helpers"
 import "@tests/pool-sparse-helpers"
 import "@tests/proofs-fixture"
 import "@wrappers/Pool.gen"
@@ -73,18 +74,14 @@ fun setupPool(): (Pool, Treasury, address) {
 }
 
 fun setupDepositPoolWithExactBalance(
-    probeMaster: address,
     jettonMaster: address,
     targetBalance: coins,
 ): (Pool, Treasury, address) {
-    testing.setNow(testing.getNow());
-    val probeDeployValue = targetBalance + ton("0.01");
-    val (probe, _, _) = setupPoolWithMasterAndDeployValue(probeMaster, probeDeployValue);
-    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
     val (pool, deployer, jettonWallet) = setupPoolWithMasterAndDeployValue(
         jettonMaster,
-        targetBalance + deployFee,
+        targetBalance + ton("0.1"),
     );
+    setExactTestAccountBalance(pool.address, targetBalance);
     expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return (pool, deployer, jettonWallet);
 }
@@ -173,50 +170,32 @@ fun setupWithdrawStatePoolWithRootHistory(
 }
 
 fun setupWithdrawStatePoolWithExactBalance(
-    probeMaster: address,
     jettonMaster: address,
     targetBalance: coins,
 ): (Pool, Treasury, address) {
-    testing.setNow(testing.getNow());
-    val probeDeployValue = targetBalance + ton("0.01");
-    val (probe, _, _) = setupWithdrawStatePoolWithMaster(
-        probeMaster,
-        RELAYER_REIMBURSEMENT,
-        probeDeployValue,
-        false,
-    );
-    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
     val (pool, deployer, jettonWallet) = setupWithdrawStatePoolWithMaster(
         jettonMaster,
         RELAYER_REIMBURSEMENT,
-        targetBalance + deployFee,
+        targetBalance + ton("0.1"),
         false,
     );
+    setExactTestAccountBalance(pool.address, targetBalance);
     expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return (pool, deployer, jettonWallet);
 }
 
 fun setupWithdrawStatePoolWithReserveAndExactBalance(
-    probeMaster: address,
     jettonMaster: address,
     relayerReserve: coins,
     targetBalance: coins,
 ): (Pool, Treasury, address) {
-    testing.setNow(testing.getNow());
-    val probeDeployValue = targetBalance + ton("0.01");
-    val (probe, _, _) = setupWithdrawStatePoolWithMaster(
-        probeMaster,
-        relayerReserve,
-        probeDeployValue,
-        false,
-    );
-    val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
     val (pool, deployer, jettonWallet) = setupWithdrawStatePoolWithMaster(
         jettonMaster,
         relayerReserve,
-        targetBalance + deployFee,
+        targetBalance + ton("0.1"),
         false,
     );
+    setExactTestAccountBalance(pool.address, targetBalance);
     expect(testing.getAccountBalance(pool.address)).toEqual(targetBalance);
     return (pool, deployer, jettonWallet);
 }
@@ -319,7 +298,6 @@ get fun `test deposit succeeds at exact reserve threshold`() {
     MIN_DEPOSIT_VALUE +
     ton("0.001");
     val (pool, _, jettonWallet) = setupDepositPoolWithExactBalance(
-        testing.treasury("deposit-exact-probe-jm").address,
         testing.treasury("deposit-exact-jm").address,
         targetBalance,
     );
@@ -451,7 +429,6 @@ get fun `test withdraw succeeds at jetton solvency threshold with storage slack`
     val targetBalance: coins = POOL_BASE_RENT_RUNWAY + POOL_ROOT_HISTORY_RENT_PER_SLOT +
     RELAYER_REIMBURSEMENT;
     val (pool, _, jettonWallet) = setupWithdrawStatePoolWithExactBalance(
-        testing.treasury("jetton-exact-probe-jm").address,
         testing.treasury("jetton-exact-jm").address,
         targetBalance,
     );
@@ -479,7 +456,6 @@ get fun `test withdraw fails one nano below jetton solvency threshold`() {
     val targetBalance: coins = POOL_BASE_RENT_RUNWAY + POOL_ROOT_HISTORY_RENT_PER_SLOT +
     RELAYER_REIMBURSEMENT;
     val (pool, _, _) = setupWithdrawStatePoolWithExactBalance(
-        testing.treasury("jetton-below-probe-jm").address,
         testing.treasury("jetton-below-jm").address,
         targetBalance - 1,
     );
@@ -506,7 +482,6 @@ get fun `test withdraw succeeds at jetton solvency threshold with second reserve
     val targetBalance: coins = POOL_BASE_RENT_RUNWAY + POOL_ROOT_HISTORY_RENT_PER_SLOT +
     relayerReserve;
     val (pool, _, jettonWallet) = setupWithdrawStatePoolWithReserveAndExactBalance(
-        testing.treasury("jetton-two-reserve-exact-probe-jm").address,
         testing.treasury("jetton-two-reserve-exact-jm").address,
         relayerReserve,
         targetBalance,
@@ -536,7 +511,6 @@ get fun `test withdraw fails one nano below threshold with second reserve`() {
     val targetBalance: coins = POOL_BASE_RENT_RUNWAY + POOL_ROOT_HISTORY_RENT_PER_SLOT +
     relayerReserve;
     val (pool, _, _) = setupWithdrawStatePoolWithReserveAndExactBalance(
-        testing.treasury("jetton-two-reserve-below-probe-jm").address,
         testing.treasury("jetton-two-reserve-below-jm").address,
         relayerReserve,
         targetBalance - 1,
