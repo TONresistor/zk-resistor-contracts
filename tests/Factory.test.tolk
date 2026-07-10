@@ -62,6 +62,8 @@ fun activeFactoryShardAccount(factory: Factory): TlbShardAccount {
 }
 
 fun setFactoryBalance(factory: Factory, balance: coins) {
+    val now = testing.getNow();
+    testing.setNow(now);
     var shard = activeFactoryShardAccount(factory);
     val account = shard.account.load();
     if (account !is TlbAccountInfo) {
@@ -69,6 +71,7 @@ fun setFactoryBalance(factory: Factory, balance: coins) {
     }
     var info = account;
     info.storage.balance.grams = balance;
+    info.storageStat.lastPaid = now;
     shard.account = (info as TlbAccount).toCell();
     testing.setShardAccount(factory.address, shard);
 }

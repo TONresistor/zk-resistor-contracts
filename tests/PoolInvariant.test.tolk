@@ -40,6 +40,8 @@ fun activeShardAccount(addr: address): TlbShardAccount {
 }
 
 fun setAccountBalance(addr: address, balance: coins) {
+    val now = testing.getNow();
+    testing.setNow(now);
     var shard = activeShardAccount(addr);
     val account = shard.account.load();
     if (account !is TlbAccountInfo) {
@@ -47,6 +49,7 @@ fun setAccountBalance(addr: address, balance: coins) {
     }
     var info = account;
     info.storage.balance.grams = balance;
+    info.storageStat.lastPaid = now;
     shard.account = (info as TlbAccount).toCell();
     testing.setShardAccount(addr, shard);
 }

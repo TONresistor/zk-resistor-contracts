@@ -109,6 +109,7 @@ fun setupDepositTonPoolWithExactBalance(
     factoryAddr: address,
     targetBalance: coins,
 ): TonPool {
+    testing.setNow(testing.getNow());
     val probeDeployValue = targetBalance + ton("0.01");
     val (probe, _) = setupDeployedTonPoolWithFactoryAndValue(probeFactory, probeDeployValue);
     val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
@@ -221,6 +222,7 @@ fun setupWithdrawStateTonPoolWithExactBalance(
     factoryAddr: address,
     targetBalance: coins,
 ): TonPool {
+    testing.setNow(testing.getNow());
     val probeDeployValue = targetBalance + ton("0.01");
     val probe = setupWithdrawStateTonPoolWithFactory(
         probeFactory,
@@ -248,6 +250,7 @@ fun setupWithdrawStateTonPoolWithReservesAndExactBalance(
     pendingWithdrawTon: coins,
     targetBalance: coins,
 ): TonPool {
+    testing.setNow(testing.getNow());
     val probeDeployValue = targetBalance + ton("0.01");
     val probe = setupWithdrawStateTonPoolWithFactory(
         probeFactory,

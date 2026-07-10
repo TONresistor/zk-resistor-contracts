@@ -37,6 +37,8 @@ fun gasWithdrawProof(): ZkProof {
 }
 
 fun setDenseGasAccountBalance(addr: address, balance: coins) {
+    val now = testing.getNow();
+    testing.setNow(now);
     val currentShard = testing.getShardAccount(addr);
     assert (currentShard != null) throw 9905;
     var shard = currentShard!;
@@ -44,6 +46,7 @@ fun setDenseGasAccountBalance(addr: address, balance: coins) {
     assert (currentAccount is TlbAccountInfo) throw 9905;
     var account = currentAccount;
     account.storage.balance.grams = balance;
+    account.storageStat.lastPaid = now;
     shard.account = (account as TlbAccount).toCell();
     testing.setShardAccount(addr, shard);
 }

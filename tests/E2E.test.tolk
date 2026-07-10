@@ -77,6 +77,7 @@ fun setupDepositPoolWithExactBalance(
     jettonMaster: address,
     targetBalance: coins,
 ): (Pool, Treasury, address) {
+    testing.setNow(testing.getNow());
     val probeDeployValue = targetBalance + ton("0.01");
     val (probe, _, _) = setupPoolWithMasterAndDeployValue(probeMaster, probeDeployValue);
     val deployFee = probeDeployValue - testing.getAccountBalance(probe.address);
@@ -176,6 +177,7 @@ fun setupWithdrawStatePoolWithExactBalance(
     jettonMaster: address,
     targetBalance: coins,
 ): (Pool, Treasury, address) {
+    testing.setNow(testing.getNow());
     val probeDeployValue = targetBalance + ton("0.01");
     val (probe, _, _) = setupWithdrawStatePoolWithMaster(
         probeMaster,
@@ -200,6 +202,7 @@ fun setupWithdrawStatePoolWithReserveAndExactBalance(
     relayerReserve: coins,
     targetBalance: coins,
 ): (Pool, Treasury, address) {
+    testing.setNow(testing.getNow());
     val probeDeployValue = targetBalance + ton("0.01");
     val (probe, _, _) = setupWithdrawStatePoolWithMaster(
         probeMaster,

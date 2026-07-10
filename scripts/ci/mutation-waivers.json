@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "waivers": [
+    {
+      "contract": "Pool",
+      "source_path": "contracts/pool.tolk",
+      "rule_name": "replace_if_condition_with_false",
+      "line_contains": "if (payloadIsExotic) {",
+      "reason": "All valid TON exotic cell layouts fail the exact 608-bit/2-ref DepositPayload shape check that follows. The early guard keeps untrusted exotic input out of typed parsing."
+    }
+  ]
+}

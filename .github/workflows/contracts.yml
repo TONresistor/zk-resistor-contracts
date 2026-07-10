@@ -44,13 +44,13 @@ jobs:
       - name: Setup Acton
         uses: ton-blockchain/setup-acton@2d38fd579e1bf8753a3e0cff9ad695612b98a676 # v1.0.0
 
-      - name: MOCK_VERIFIER must be false in committed source
+      - name: Legacy verifier bypass must be absent
         run: |
-          if grep -qE '^const MOCK_VERIFIER:\s*bool\s*=\s*true' contracts/constants.tolk; then
-            echo "::error::MOCK_VERIFIER is set to true. It MUST be false for any non-test build."
+          if grep -R -n -E 'MOCK_VERIFIER|verifyInsertProofForced|verifyWithdrawProofForced' contracts; then
+            echo "::error::A legacy verifier bypass remains in production source."
             exit 1
           fi
-          echo "MOCK_VERIFIER guard OK."
+          echo "No verifier bypass found."
 
       - name: Install circuit JS dependencies
         working-directory: circuits
@@ -85,9 +85,9 @@ jobs:
       - name: Coverage floor
         run: |
           mkdir -p build/ci
-          acton test \
+          acton test tests \
             --coverage \
-            --coverage-format text \
-            --coverage-file build/ci/coverage.txt \
-            --coverage-minimum-percent 95 \
+            --coverage-format lcov \
+            --coverage-file build/ci/lcov.info \
             --reporter dot
+          node scripts/ci/check-lcov-lines.mjs build/ci/lcov.info 95

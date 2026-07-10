@@ -18,7 +18,7 @@ jobs:
   heavy-qa:
     name: Coverage, Gas, Mutation
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 180
 
     permissions:
       contents: read
@@ -64,17 +64,19 @@ jobs:
       - name: Coverage floor
         run: |
           mkdir -p build/ci-heavy
-          acton test \
+          acton test tests \
             --coverage \
-            --coverage-format text \
-            --coverage-file build/ci-heavy/coverage.txt \
-            --coverage-minimum-percent 95 \
+            --coverage-format lcov \
+            --coverage-file build/ci-heavy/lcov.info \
             --reporter dot
+          node scripts/ci/check-lcov-lines.mjs build/ci-heavy/lcov.info 95
 
       - name: Gas snapshot
         run: |
           mkdir -p build/ci-heavy
-          acton test --snapshot build/ci-heavy/gas-snapshot.json --reporter dot
+          acton test tests --snapshot build/ci-heavy/gas-snapshot.json --reporter dot
 
       - name: Mutation
+        env:
+          MUTATION_SCOPE: full
         run: bash scripts/ci/run-mutation.sh
