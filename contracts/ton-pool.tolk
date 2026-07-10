@@ -1,13 +1,15 @@
 import "constants"
+import "deployment-types"
 import "errors"
 import "pool-types" // MerkleState helpers (shared)
+import "sparse-set"
 import "ton-pool-types"
 import "verifier-insert"
 import "verifier-withdraw"
 
 contract TonPool {
     author: "ZKResistor"
-    version: "1.0.0"
+    version: "2.0.0"
     description: "ZK mixer pool for native TON. Proof binds recipient by construction; sender of withdraw tx receives RELAYER_REIMBURSEMENT."
     storage: TonPoolStorage
     incomingMessages: AllowedTonMessage
@@ -21,17 +23,27 @@ fun onInternalMessage(in: InMessage) {
     val msg = lazy AllowedTonMessage.fromSlice(in.body);
 
     match (msg) {
+        TonPoolConfirmPoolDeployment => {
+            msg.forceLoadLazyObject().assertEnd();
+            handleConfirmPoolDeployment(in.valueCoins, msg);
+        }
         TonDepositPayload => {
+            val trailing = msg.forceLoadLazyObject();
+            if (!trailing.isEmpty()) {
+                return refundDeposit(msg.fromUser);
+            }
             handleDeposit(in.senderAddress, in.valueCoins, msg);
         }
         TonWithdraw => {
+            val trailing = msg.forceLoadLazyObject();
+            assert (trailing.isEmpty()) throw Errors.InvalidMessage;
             handleWithdraw(in.senderAddress, in.valueCoins, msg);
         }
         else => {
             // Empty body accepted as factory's deploy message (init surplus)
             // or a passive top-up. The TON stays on the pool as a storage-rent
-            // buffer above POOL_TON_RESERVE + earmarks. Subsequent withdraws
-            // drain the buffer organically via SEND_MODE_CARRY_ALL_BALANCE.
+            // buffer above POOL_TON_RESERVE + earmarks. Withdraw reserves the
+            // complete pre-message balance, so later callers cannot sweep it.
             assert (in.body.isEmpty()) throw Errors.InvalidMessage;
         }
     }
@@ -44,10 +56,36 @@ fun onBouncedMessage(_in: InMessageBounced) {
 }
 
 // ============================================================================
+// FACTORY DEPLOYMENT CONFIRMATION
+// ============================================================================
+
+const TON_POOL_CONFIRM_VALUE: coins = 10000000 // 0.01 TON
+const TON_POOL_CONFIRM_HANDLER_BUDGET: coins = 10000000 // 0.01 TON
+
+fun handleConfirmPoolDeployment(valueCoins: coins, msg: TonPoolConfirmPoolDeployment) {
+    assert (
+        valueCoins >= TON_POOL_CONFIRM_VALUE + TON_POOL_CONFIRM_HANDLER_BUDGET
+    ) throw Errors.InsufficientGas;
+
+    val identity = lazy TonPoolStorage.load().identity.load();
+    val confirmation = createMessage({
+        bounce: BounceMode.NoBounce,
+        dest: identity.factory,
+        value: TON_POOL_CONFIRM_VALUE,
+        body: PoolDeployConfirmed {
+            queryId: msg.queryId,
+            jettonMaster: null,
+            denomination: identity.denomination,
+        },
+    });
+    confirmation.send(SEND_MODE_REGULAR | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
+}
+
+// ============================================================================
 // DEPOSIT
 // ============================================================================
 
-fun refundDeposit(fromUser: address, _amount: coins, _reason: int) {
+fun refundDeposit(fromUser: address) {
     // CARRY_ALL_REMAINING_MESSAGE_VALUE forwards the inbound value minus
     // action fees. Paying fees from the pool's own balance would let a
     // spammer drain a freshly-deployed pool by triggering failing deposits.
@@ -68,29 +106,24 @@ fun handleDeposit(_sender: address, valueCoins: coins, msg: TonDepositPayload) {
     // refunded to msg.fromUser at the end of the success path.
     val requiredValue: coins = identity.denomination + MIN_DEPOSIT_VALUE;
     if (valueCoins < requiredValue) {
-        return refundDeposit(msg.fromUser, valueCoins, Errors.InsufficientDepositValue);
+        return refundDeposit(msg.fromUser);
     }
 
     if (merkle.nextIndex >= MERKLE_TREE_CAPACITY) {
-        return refundDeposit(msg.fromUser, valueCoins, Errors.TreeFull);
-    }
-
-    if (merkle.isCommitmentUsed(msg.commitment)) {
-        return refundDeposit(msg.fromUser, valueCoins, Errors.CommitmentAlreadyExists);
+        return refundDeposit(msg.fromUser);
     }
 
     if (!isWellFormedZkProofCell(msg.insertProof)) {
-        return refundDeposit(msg.fromUser, valueCoins, Errors.InvalidInsertProof);
+        return refundDeposit(msg.fromUser);
     }
 
-    val depositExcess: coins = valueCoins - requiredValue;
-    val newRelayerReserve: coins = storage.relayerReserve + RELAYER_REIMBURSEMENT;
-    val newPendingWithdrawTon: coins = storage.pendingWithdrawTon + identity.denomination;
-    if (
-        contract.getOriginalBalance() - depositExcess <
-        POOL_TON_RESERVE + newRelayerReserve + newPendingWithdrawTon
-    ) {
-        return refundDeposit(msg.fromUser, valueCoins, Errors.InsufficientBalance);
+    val commitmentUpdate = merkle.prepareSparseSetUpdate(
+        SPARSE_SET_COMMITMENT_DOMAIN,
+        msg.commitment,
+        msg.commitmentSetProof,
+    );
+    if (commitmentUpdate.status != SparseSetUpdateStatus.Ok) {
+        return refundDeposit(msg.fromUser);
     }
 
     val proof = msg.insertProof.load();
@@ -104,22 +137,37 @@ fun handleDeposit(_sender: address, valueCoins: coins, msg: TonDepositPayload) {
         proof.proofC.load().raw,
     );
     if (!ok) {
-        return refundDeposit(msg.fromUser, valueCoins, Errors.InvalidInsertProof);
+        return refundDeposit(msg.fromUser);
     }
 
-    val leafIndex = merkle.insertCommitment(msg.commitment, msg.newRoot);
+    val leafIndex = merkle.insertCommitmentBounded(msg.newRoot, commitmentUpdate);
+    val depositExcess: coins = valueCoins - requiredValue;
+    val newRelayerReserve: coins = storage.relayerReserve + RELAYER_REIMBURSEMENT;
+    val newPendingWithdrawTon: coins = storage.pendingWithdrawTon + identity.denomination;
+    val newRentRunway = merkle.poolRentRunway();
+    if (
+        contract.getOriginalBalance() - depositExcess <
+        newRentRunway + newRelayerReserve + newPendingWithdrawTon + POOL_DEPOSIT_FEE_MARGIN
+    ) {
+        return refundDeposit(msg.fromUser);
+    }
+
     storage.merkle = merkle.toCell();
     storage.relayerReserve = newRelayerReserve;
     storage.pendingWithdrawTon = newPendingWithdrawTon;
     storage.save();
 
     val depositEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0x00de9051 },
+        dest: ExtOutLogBucket { topic: 0x00de9052 },
         body: TonDepositEvent {
             leafIndex,
             commitment: msg.commitment,
             newRoot: msg.newRoot,
             fromUser: msg.fromUser,
+            sparseUpdate: (SparseSetEventUpdate {
+                bucketId: commitmentUpdate.bucketId as uint8,
+                newRoot: commitmentUpdate.newRoot,
+            }).toCell(),
         },
     });
     depositEvent.send(SEND_MODE_REGULAR);
@@ -157,7 +205,18 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     val recipientField: uint256 = recipientHash & ADDRESS_FIELD_MASK;
 
     assert (merkle.isKnownRoot(msg.root)) throw Errors.UnknownRoot;
-    assert (!merkle.isNullifierSpent(msg.nullifierHash)) throw Errors.NullifierAlreadySpent;
+    val nullifierUpdate = merkle.prepareSparseSetUpdate(
+        SPARSE_SET_NULLIFIER_DOMAIN,
+        msg.nullifierHash,
+        msg.nullifierSetProof,
+    );
+    if (nullifierUpdate.status == SparseSetUpdateStatus.StaleRoot) {
+        throw Errors.StaleSparseSetRoot;
+    }
+    if (nullifierUpdate.status == SparseSetUpdateStatus.NonEmptyLeafOrInvalidWitness) {
+        throw Errors.NullifierAlreadySpent;
+    }
+    assert (nullifierUpdate.status == SparseSetUpdateStatus.Ok) throw Errors.InvalidSparseSetProof;
 
     val proof = msg.proof.load();
     val ok = verifyWithdrawProof(
@@ -177,21 +236,19 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     assert (storage.relayerReserve >= RELAYER_REIMBURSEMENT) throw Errors.InsufficientReserve;
     assert (storage.pendingWithdrawTon >= identity.denomination) throw Errors.InsufficientReserve;
 
-    // Solvency check before committing state: pool must cover the recipient
-    // payout, the sender payout, the external event, and all other
-    // outstanding earmarks. 0.03 TON action-fee buffer absorbs forwarding
-    // fees plus mainnet congestion headroom. The broadcaster's inbound gas
-    // is excluded: it must not fund protocol solvency because the final
-    // reserve/refund path also excludes it.
-    val tonRequired: coins = POOL_TON_RESERVE + recipientAmount + RELAYER_REIMBURSEMENT + 30000000;
+    // Before this caller-funded transaction, the pool must already cover its
+    // measured rent runway and every outstanding reward/native payout.
     val balanceAvailable: coins = contract.getOriginalBalance() - valueCoins;
-    val otherReserves: coins = (storage.relayerReserve - RELAYER_REIMBURSEMENT) +
-    (storage.pendingWithdrawTon - identity.denomination);
-    assert (balanceAvailable >= tonRequired + otherReserves) throw Errors.InsufficientBalance;
+    val currentRentRunway = merkle.poolRentRunway();
+    assert (
+        balanceAvailable >= currentRentRunway + storage.relayerReserve + storage.pendingWithdrawTon
+    ) throw Errors.InsufficientBalance;
 
     storage.relayerReserve = storage.relayerReserve - RELAYER_REIMBURSEMENT;
     storage.pendingWithdrawTon = storage.pendingWithdrawTon - identity.denomination;
-    merkle.markNullifierSpent(msg.nullifierHash);
+    merkle.markNullifierSpentBounded(nullifierUpdate);
+    val newRentRunway = merkle.poolRentRunway();
+    val rentGrowth: coins = newRentRunway - currentRentRunway;
     storage.merkle = merkle.toCell();
     storage.save();
 
@@ -202,14 +259,18 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
         dest: msg.recipient,
         value: recipientAmount,
     });
-    recipientPay.send(SEND_MODE_REGULAR);
+    recipientPay.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 
     val withdrawEvent = createExternalLogMessage({
-        dest: ExtOutLogBucket { topic: 0x00717d3a },
+        dest: ExtOutLogBucket { topic: 0x00717d3b },
         body: TonWithdrawEvent {
             nullifierHash: msg.nullifierHash,
             recipient: msg.recipient,
             payout: recipientAmount,
+            sparseUpdate: (SparseSetEventUpdate {
+                bucketId: nullifierUpdate.bucketId as uint8,
+                newRoot: nullifierUpdate.newRoot,
+            }).toCell(),
         },
     });
     withdrawEvent.send(SEND_MODE_REGULAR);
@@ -220,7 +281,8 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     // accumulated buffer is preserved: every later withdraw still finds its
     // own earmark + denomination intact and no broadcaster can sweep the pool.
     reserveToncoinsOnBalance(
-        contract.getOriginalBalance() - valueCoins - RELAYER_REIMBURSEMENT - recipientAmount,
+        contract.getOriginalBalance() - valueCoins - RELAYER_REIMBURSEMENT - recipientAmount +
+        rentGrowth,
         RESERVE_MODE_AT_MOST,
     );
     val senderPay = createMessage({
@@ -230,7 +292,7 @@ fun handleWithdraw(sender: address, valueCoins: coins, msg: TonWithdraw) {
     });
     // SAFETY: reserveToncoinsOnBalance pins the pool buffer, every remaining
     // earmark, and every pending native payout before the surplus is carried.
-    senderPay.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
+    senderPay.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 }
 
 // ============================================================================
@@ -257,6 +319,15 @@ get fun nextIndex(): uint32 {
     return storage.merkle.load().nextIndex;
 }
 
+get fun sparseRoot(domain: uint32, bucketId: uint8): uint256 {
+    val storage = lazy TonPoolStorage.load();
+    return storage.merkle.load().sparseSetRoot(domain, bucketId);
+}
+
+get fun rentRunway(): coins {
+    return TonPoolStorage.load().merkle.load().poolRentRunway();
+}
+
 get fun relayerReserve(): coins {
     val storage = lazy TonPoolStorage.load();
     return storage.relayerReserve;
@@ -265,6 +336,17 @@ get fun relayerReserve(): coins {
 get fun pendingWithdrawTon(): coins {
     val storage = lazy TonPoolStorage.load();
     return storage.pendingWithdrawTon;
+}
+
+get fun withdrawalCount(): uint32 {
+    val storage = lazy TonPoolStorage.load();
+    val identity = storage.identity.load();
+    val deposits = storage.merkle.load().nextIndex;
+    return calculateTonPoolWithdrawalCount(
+        identity.denomination,
+        deposits,
+        storage.pendingWithdrawTon,
+    );
 }
 
 get fun treeDepth(): int {

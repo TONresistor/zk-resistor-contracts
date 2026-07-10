@@ -1,6 +1,7 @@
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
+import "@contracts/bls-scalar"
 import "@contracts/constants"
 import "@contracts/pool-types"
 import "@tests/proofs-fixture"
@@ -30,15 +31,14 @@ fun freshPool(): Pool {
         nextIndex: 0,
         currentRoot: 0,
         rootHistory: [],
-        nullifiers: [],
-        commitments: [],
+        sparseSets: createEmptySparseSetRoots(),
     };
     return Pool.fromStorage({
         identity: identity.toCell(),
         jettonWallet: testing.treasury("jw").address,
         relayerReserve: 0,
         merkle: merkle.toCell(),
-        withdrawals: [],
+        withdrawalCount: 0,
     });
 }
 
@@ -48,6 +48,11 @@ fun setupPool(): Pool {
     val res = pool.deploy(deployer.address, { value: ton("1") });
     expect(res).toHaveSuccessfulDeploy({ to: pool.address });
     return pool;
+}
+
+get fun `test scalar canonicality boundary is exactly the field order`() {
+    expect(blsScalarIsCanonical(BLS12_381_R - 1)).toEqual(true);
+    expect(blsScalarIsCanonical(BLS12_381_R)).toEqual(false);
 }
 
 get fun `test insert proof verifies on-chain via BLS pairing`() {
@@ -61,6 +66,21 @@ get fun `test insert proof verifies on-chain via BLS pairing`() {
         fixtureInsertProofB(),
         fixtureInsertProofC(),
     );
+    expect(ok).toEqual(true);
+}
+
+get fun `test second insert proof verifies IC leaf-index term on-chain`() {
+    val pool = setupPool();
+    val ok = pool.previewInsertProof(
+        FIXTURE_SECOND_INSERT_OLD_ROOT,
+        FIXTURE_SECOND_INSERT_NEW_ROOT,
+        FIXTURE_SECOND_INSERT_COMMITMENT,
+        FIXTURE_SECOND_INSERT_LEAF_INDEX,
+        fixtureSecondInsertProofA(),
+        fixtureSecondInsertProofB(),
+        fixtureSecondInsertProofC(),
+    );
+    expect(FIXTURE_SECOND_INSERT_LEAF_INDEX).toEqual(1);
     expect(ok).toEqual(true);
 }
 

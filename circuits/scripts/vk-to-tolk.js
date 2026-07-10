@@ -54,12 +54,15 @@ function emitG2Function(name, point) {
 }
 
 function emitIcFunction(prefix, IC) {
+    if (IC.length === 0) {
+        throw new Error("verification key must contain at least one IC point");
+    }
     const lines = [
-        // No @pure: `throw` is impure under Tolk's purity model.
+        `@pure`,
         `fun ${prefix}Ic(i: int): slice {`,
         `    // Auto-generated from ${vkPath}`,
     ];
-    for (let idx = 0; idx < IC.length; idx++) {
+    for (let idx = 0; idx < IC.length - 1; idx++) {
         const chunks = g1ToChunks(IC[idx]);
         lines.push(`    if (i == ${idx}) {`);
         lines.push(`        return beginCell()`);
@@ -70,7 +73,15 @@ function emitIcFunction(prefix, IC) {
         lines.push(`            .beginParse();`);
         lines.push(`    }`);
     }
-    lines.push(`    throw 0xFFFE; // unreachable for valid index`);
+    const lastChunks = g1ToChunks(IC[IC.length - 1]);
+    lines.push(`    // Verifier callers use the fixed circuit arity, so the last IC`);
+    lines.push(`    // point is the exhaustive final case.`);
+    lines.push(`    return beginCell()`);
+    for (let i = 0; i < 8; i++) {
+        lines.push(`        .storeUint(${lastChunks[i]}, 48)`);
+    }
+    lines.push(`        .endCell()`);
+    lines.push(`        .beginParse();`);
     lines.push(`}`);
     return lines.join("\n");
 }

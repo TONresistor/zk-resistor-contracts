@@ -12,42 +12,92 @@ const FIXTURE_INSERT_LEAF_INDEX: uint32 = 0
 
 fun fixtureInsertProofA(): slice {
     return beginCell()
-        .storeUint(156220169074002, 48)
-        .storeUint(85369031601643, 48)
-        .storeUint(226672716018386, 48)
-        .storeUint(84079366704217, 48)
-        .storeUint(118777281485376, 48)
-        .storeUint(145275326194946, 48)
-        .storeUint(18784102283345, 48)
-        .storeUint(208042822769830, 48)
+        .storeUint(188374619861350, 48)
+        .storeUint(142986856939848, 48)
+        .storeUint(216808613410834, 48)
+        .storeUint(259837223913739, 48)
+        .storeUint(164400441602188, 48)
+        .storeUint(262198822943225, 48)
+        .storeUint(164882042145605, 48)
+        .storeUint(116072008581708, 48)
         .endCell()
         .beginParse();
 }
 
 fun fixtureInsertProofB(): slice {
     return beginCell()
-        .storeUint(44070516013846361631718169015, 96)
-        .storeUint(72855073496075420490774330123, 96)
-        .storeUint(70088180290489406481275636565, 96)
-        .storeUint(29905958789503420614002003833, 96)
-        .storeUint(2699636982846172423598103624, 96)
-        .storeUint(5395671177233239727503523993, 96)
-        .storeUint(64446987579845326338762210281, 96)
-        .storeUint(78457754550794559092871062105, 96)
+        .storeUint(43054735354714421611206522391, 96)
+        .storeUint(16343265094039397286677933817, 96)
+        .storeUint(26925426492356017221392706026, 96)
+        .storeUint(51767009578501017326994811608, 96)
+        .storeUint(4428122508690594367941135589, 96)
+        .storeUint(23748488124081715942784998984, 96)
+        .storeUint(51742716908930898718293806883, 96)
+        .storeUint(57225977135329598281624119496, 96)
         .endCell()
         .beginParse();
 }
 
 fun fixtureInsertProofC(): slice {
     return beginCell()
-        .storeUint(168974727299295, 48)
-        .storeUint(129902958078382, 48)
-        .storeUint(204467631231326, 48)
-        .storeUint(64904359482640, 48)
-        .storeUint(211848460722949, 48)
-        .storeUint(246520657720351, 48)
-        .storeUint(231596956873510, 48)
-        .storeUint(255768980910976, 48)
+        .storeUint(198653868567169, 48)
+        .storeUint(266053908849602, 48)
+        .storeUint(105927245217900, 48)
+        .storeUint(90841307949365, 48)
+        .storeUint(154778522929732, 48)
+        .storeUint(234023536254253, 48)
+        .storeUint(151263146486888, 48)
+        .storeUint(82758127365304, 48)
+        .endCell()
+        .beginParse();
+}
+
+// =========================================================
+// SECOND INSERT: extends the first root at leafIndex = 1
+// =========================================================
+const FIXTURE_SECOND_INSERT_OLD_ROOT: uint256 = 43515644044378706072201279701593924060404973014210971961542087297792024379934
+const FIXTURE_SECOND_INSERT_NEW_ROOT: uint256 = 41531828449238201516110078461509411841891324803968732591342495950317063879472
+const FIXTURE_SECOND_INSERT_COMMITMENT: uint256 = 9230619107436685392390405458411362114089451917959578904137191319185138993813
+const FIXTURE_SECOND_INSERT_LEAF_INDEX: uint32 = 1
+
+fun fixtureSecondInsertProofA(): slice {
+    return beginCell()
+        .storeUint(192613853385613, 48)
+        .storeUint(208555726155699, 48)
+        .storeUint(44853590835892, 48)
+        .storeUint(71606320504544, 48)
+        .storeUint(128898726040511, 48)
+        .storeUint(240797587128539, 48)
+        .storeUint(244714247031029, 48)
+        .storeUint(104801909877615, 48)
+        .endCell()
+        .beginParse();
+}
+
+fun fixtureSecondInsertProofB(): slice {
+    return beginCell()
+        .storeUint(55591634264088398706862202322, 96)
+        .storeUint(25164344690642248278053607446, 96)
+        .storeUint(52110305693578627956529533344, 96)
+        .storeUint(37692816567420803078884925014, 96)
+        .storeUint(3851607769994882061714415467, 96)
+        .storeUint(2927772693983936263071594056, 96)
+        .storeUint(39448986242384668520589037002, 96)
+        .storeUint(22673962973564909070504173893, 96)
+        .endCell()
+        .beginParse();
+}
+
+fun fixtureSecondInsertProofC(): slice {
+    return beginCell()
+        .storeUint(168703295177756, 48)
+        .storeUint(204598415093602, 48)
+        .storeUint(56224818286085, 48)
+        .storeUint(255709978726305, 48)
+        .storeUint(110204080539586, 48)
+        .storeUint(162325274884743, 48)
+        .storeUint(101533731379209, 48)
+        .storeUint(216259949817558, 48)
         .endCell()
         .beginParse();
 }
@@ -67,42 +117,42 @@ const FIXTURE_WITHDRAW_RECIPIENT: uint256 = 108878571068800865772991973165966069
 
 fun fixtureWithdrawProofA(): slice {
     return beginCell()
-        .storeUint(144506293883088, 48)
-        .storeUint(254177117502112, 48)
-        .storeUint(278645936310100, 48)
-        .storeUint(144385621492908, 48)
-        .storeUint(119532424200405, 48)
-        .storeUint(61384588252149, 48)
-        .storeUint(256629383498647, 48)
-        .storeUint(200226596569343, 48)
+        .storeUint(158977830916625, 48)
+        .storeUint(121956419440043, 48)
+        .storeUint(14785272715007, 48)
+        .storeUint(237954918538756, 48)
+        .storeUint(156570916494883, 48)
+        .storeUint(146237234502831, 48)
+        .storeUint(218860132126566, 48)
+        .storeUint(159846022731547, 48)
         .endCell()
         .beginParse();
 }
 
 fun fixtureWithdrawProofB(): slice {
     return beginCell()
-        .storeUint(40727318597578682308247572772, 96)
-        .storeUint(72781069301269372175415797196, 96)
-        .storeUint(77998694924182148737194847912, 96)
-        .storeUint(51679123397441871584689056459, 96)
-        .storeUint(4953097228921030973068455792, 96)
-        .storeUint(4484858820639930250743086081, 96)
-        .storeUint(37238621425614590875493064028, 96)
-        .storeUint(40550920272061151695881350283, 96)
+        .storeUint(46490547138824129664373813249, 96)
+        .storeUint(4084135093221368005056599884, 96)
+        .storeUint(65843426472407108577284526387, 96)
+        .storeUint(27575125959420336872827478806, 96)
+        .storeUint(4385612015112138313685258000, 96)
+        .storeUint(45014794787880396561292156447, 96)
+        .storeUint(28980540144385543362438348758, 96)
+        .storeUint(16641073500186273107245039539, 96)
         .endCell()
         .beginParse();
 }
 
 fun fixtureWithdrawProofC(): slice {
     return beginCell()
-        .storeUint(159346098851688, 48)
-        .storeUint(163844420363449, 48)
-        .storeUint(88633406635061, 48)
-        .storeUint(64778021478193, 48)
-        .storeUint(119719538997440, 48)
-        .storeUint(258542100481232, 48)
-        .storeUint(71431977058579, 48)
-        .storeUint(3535394203889, 48)
+        .storeUint(143738559577170, 48)
+        .storeUint(37847655968930, 48)
+        .storeUint(66765340970906, 48)
+        .storeUint(109718406011409, 48)
+        .storeUint(242447570996027, 48)
+        .storeUint(191739296162301, 48)
+        .storeUint(272642082082182, 48)
+        .storeUint(133963024366226, 48)
         .endCell()
         .beginParse();
 }

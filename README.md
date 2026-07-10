@@ -6,7 +6,10 @@
 
 Deposit `N` units of an asset into a pool with a commitment `c = Poseidon(nullifier, secret)`. Save the note `(asset, denomination, leafIndex, nullifier, secret)` locally. Later, anyone produces a Groth16 proof of knowledge of `(nullifier, secret)` and a recipient address. The pool verifies the proof, marks the nullifier spent, and pays the recipient the full denomination. The proof reveals nothing about which deposit is spent.
 
-Up to 1,048,576 deposits per pool at Merkle depth 20. All pools are immutable after deploy.
+Each pool has exactly 1,048,576 deposit slots at Merkle depth 20. The v2
+contracts keep this capacity effective on-chain: duplicate commitments and spent
+nullifiers use two bounded 256-bucket transparent sparse sets instead of one
+dictionary entry per note. All pools are immutable after deploy.
 
 ## Contracts
 
@@ -20,21 +23,27 @@ One deployment per network. Spawns pools on demand; both operations are permissi
 
 | Opcode | Message | Required value |
 |---|---|---|
-| `0xa0c0c0c0` | CreatePool | 0.20 TON |
-| `0xa0c0c0c2` | CreateTonPool | 0.20 TON |
+| `0xa0c0c0c0` | CreatePool | 0.45 TON |
+| `0xa0c0c0c2` | CreateTonPool | 0.45 TON |
 
-Event: `FactoryPoolCreatedEvent` (`0x00c0c0c0`) indexes create requests. The registry getter is canonical because failed deploys roll back. Getter `expectedPoolAddress` returns a future pool's address.
+`FactoryPoolCreatedEvent` (`0x00c0c0c0`) indexes accepted create requests; it is
+not an activation receipt. A later deploy bounce remains in history but removes
+the registry entry. The registry getters are canonical, `poolDeploymentPending`
+distinguishes in-flight children, and `expectedPoolAddress` derives a future
+pool address. The permanent registry is capped at 4,096 pools and transient
+creates at 128.
 
 ### `Pool`
 
 One per `(jettonMaster, denomination)`. Asset: a TEP-74 jetton. At creation the pool resolves its own jetton wallet on-chain via TEP-89, so the creator cannot poison the binding.
 
-| Opcode       | Message         | Required value                             |
-| ------------ | --------------- | ------------------------------------------ |
-| `0xd6e05111` | DepositPayload  | denomination in jettons + 0.32 TON forward |
-| `0x4b6f0b50` | Withdraw        | 0.10 TON                                   |
+| Opcode | Message | Required value |
+|---|---|---|
+| `0xd6e05112` | DepositPayload inside TEP-74 notification | denomination in jettons + 0.37 TON forward |
+| `0x4b6f0b51` | Withdraw | 0.25 TON |
 
-Events: `DepositEvent` (`0x00de9051`), `WithdrawEvent` (`0x00717d3a`), `PoolReadyEvent` (`0x00def002`).
+Events: `DepositEvent` (`0x00de9052`), `WithdrawalAcceptedEvent`
+(`0x00717d3c`) and `PoolReadyEvent` (`0x00def002`).
 
 ### `TonPool`
 
@@ -42,28 +51,54 @@ One per denomination. Asset: native TON. Same deposit / withdraw semantics as `P
 
 | Opcode | Message | Required value |
 |---|---|---|
-| `0xd6e05111` | TonDepositPayload | denomination + 0.32 TON |
-| `0x4b6f0b50` | TonWithdraw | 0.10 TON |
+| `0xd6e05112` | TonDepositPayload | denomination + 0.37 TON |
+| `0x4b6f0b51` | TonWithdraw | 0.10 TON |
 
-Events: `TonDepositEvent` (`0x00de9051`), `TonWithdrawEvent` (`0x00717d3a`).
+Events: `TonDepositEvent` (`0x00de9052`) and `TonWithdrawEvent`
+(`0x00717d3b`).
 
-Shared pool storage: `identity` (immutable, address-determining), `merkle` state, `relayerReserve`.
+Shared pool state is bounded: immutable identity, depth-20 root and 100-root
+history, 256 commitment bucket roots, 256 nullifier bucket roots, and accounting
+reserves. Jetton Pool also keeps a `withdrawalCount` bounded by `nextIndex`.
 
 ## Protocol
 
-1. **Deposit.** Transfer `denomination` units and a commitment `c = Poseidon(nullifier, secret)` to the pool. Pool inserts `c` at `leafIndex = nextIndex`.
+1. **Deposit.** Transfer `denomination` units and a commitment `c = Poseidon(nullifier, secret)` to the pool. The Pool verifies a transparent sparse non-membership witness, then inserts `c` at `leafIndex = nextIndex`.
 2. **Note.** Save `(asset, denomination, leafIndex, nullifier, secret)` locally. Lose it, lose the funds.
 3. **Withdraw.** Produce a Groth16 proof of knowledge of `(nullifier, secret)` for some commitment in the tree, declaring `nullifierHash = Poseidon(nullifier, 0)` and a recipient `R`.
-4. **Verification.** Pool checks the root is in `rootHistory`, the nullifier is unspent, and the pairing equation holds. Pays `R` the full denomination.
+4. **Verification.** Pool checks the root is recent, verifies a transparent sparse non-membership witness for the nullifier, and checks the pairing equation. It then records the nullifier and pays `R` the full denomination.
 5. **Broadcaster.** The relayer is not bound in the proof, so anyone broadcasting a published proof claims the 0.30 TON earmark plus their unused transaction gas. A normal replay fails on the nullifier check.
 
-### Jetton failure recovery
+### Jetton settlement invariants
 
-Jetton withdrawal `queryId` values must be unique per pool and below `2^63`; the high bit is reserved for the contract's wire-level bounce domain. If the authenticated first hop from the pool to its own jetton wallet bounces, the same `Withdraw` and `queryId` become retryable. A retry must provide a valid proof for the stored root and nullifier, may choose a new proof-bound recipient, and never releases a second relayer reward. Bounced TON is returned to the account that funded the failed attempt.
+The caller's `clientQueryId` is correlation data only and is copied unchanged
+into the standard TEP-74 payout. Each accepted withdrawal is one-shot: the Pool
+marks the nullifier, increments `withdrawalCount`, sends one canonical transfer,
+and exposes no second-payment API.
+
+Only the immutable master may bind the Pool wallet through TEP-89. Only
+notifications from that bound wallet can increment `nextIndex`, and every
+accepted notification carries exactly one denomination. A withdrawal requires
+`withdrawalCount < nextIndex`; with a standards-compliant wallet, its Jetton
+balance therefore covers every accepted payout. The Pool attaches `0.15 TON`
+to the wallet transfer, while the caller-funded `0.25 TON` withdrawal floor
+covers Pool compute and actions. Local action failure rolls back the nullifier,
+counter and reserve writes atomically.
 
 Rejected deposits return their jettons through the pool's jetton wallet and carry the remaining inbound TON, so malformed deposits cannot trap their excess TON or consume the pool's reserves.
 
-TEP-74 does not provide a universal authenticated failure acknowledgement for the second hop from the sender jetton wallet to an arbitrary recipient jetton wallet. A standards-compliant sender wallet restores its jetton balance if that internal transfer bounces, but the pool cannot safely infer that outcome and automatically retry it without jetton-specific support.
+These guarantees apply to TEP-74/89 compliant Jettons. A malicious master can
+return a non-standard wallet, but that can affect only the permissionless Pool
+for its own asset. The contracts have no allowlist, admin or off-chain oracle;
+official clients may still choose which assets they present to users.
+
+### Off-chain state at one million notes
+
+The bounded contracts remove the on-chain state-growth limit, but proving still
+requires an incremental off-chain state provider. A production provider must
+persist the Poseidon tree, sparse Patricia nodes, ordered events, checkpoints,
+and verified journals. Rebuilding from genesis or retaining all nodes in browser
+JavaScript Maps is not a one-million-note production design.
 
 ## Building from source
 
@@ -77,7 +112,9 @@ acton test
 acton fmt --check
 ```
 
-131 tests including real Groth16 BLS12-381 pairing on-chain. Wrappers under `wrappers/` are auto-generated by `acton wrapper`.
+The suite includes real Groth16 BLS12-381 pairing, dense 247-sibling sparse
+witnesses, state bounds, exact economic thresholds, mutation checks, and action
+failure injection. Wrappers under `wrappers/` are generated by Acton.
 
 ### Circuits
 
@@ -110,9 +147,9 @@ Mirrored on-chain and off-chain. 248 bits fit inside the BLS12-381 Fr field.
 
 | Contract | Code hash |
 |---|---|
-| Factory | `1d4250fdd5fcadb5f066adcc22e3f73496a4abf2f115224d45c27a9b83897384` |
-| Pool | `ec61be09ea751917ca5632753ee7473ade111606432ff8e15f8034e00eae17fe` |
-| TonPool | `7edd39f831f3944abe75646a81eac85d67cf9b3bf3a3ec2d0f6aa8479537ed0e` |
+| Factory | `199ab5112f96f7f390522f9b8c5df5429f3f3e037409b8bfad7648b954f2ec8f` |
+| Pool | `caca8420450e7ae086462cdd7ce32fcbb1c5650151f1606003515b598bcc26db` |
+| TonPool | `057bf7a3006b61bdcc8b77b1264f3b473ff2fec0181de478059eb0d40ecd9d78` |
 
 Reproduce with `jq -r .hash build/*.json` from a clean build.
 
@@ -138,7 +175,8 @@ Committed VK JSON hashes:
 
 ### Test deployment
 
-The current mainnet deployment is a public test deployment. Redeployment with the final ceremony VKs is pending.
+The current public mainnet deployment is the older pre-ceremony test contract.
+It remains live until a separately approved v2 production cutover.
 
 - Factory: [`EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu`](https://tonviewer.com/EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu)
 - Frontend: [zk.resistance.dog](https://zk.resistance.dog)

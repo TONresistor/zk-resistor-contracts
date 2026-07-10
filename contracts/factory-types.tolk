@@ -1,14 +1,23 @@
+import "deployment-types"
+
 // ============================================================================
 // FACTORY STORAGE
 // ============================================================================
 //
-// The factory has no admin and no changeable state beyond pool indexes.
-// Forward maps (key -> poolAddress) let off-chain consumers enumerate pools;
-// reverse maps (poolAddress -> key) let onBouncedMessage roll back a failed
-// deploy. Create sender maps let the bounce handler refund the create sender;
-// entries are retained for successful pools because TON has no generic deploy
-// success callback. Sub-cells keep FactoryStorage under the 1023-bit / 4-ref
-// main-cell limit.
+// The factory has no admin. Forward maps are permanent enumeration indexes;
+// reverse and creator maps exist only while a deploy is in flight. A pool
+// authenticates its activation with PoolDeployConfirmed, after which the
+// transient entries are deleted. Sub-cells keep FactoryStorage below the
+// 1023-bit / 4-ref main-cell limit.
+
+const MAX_FACTORY_POOLS: int = 4096
+const MAX_IN_FLIGHT_CREATES: int = 128
+
+// Keep both deployable code cells in one address-determining bundle.
+struct FactoryCodes {
+    poolCode: cell
+    tonPoolCode: cell
+}
 
 struct Registries {
     poolRegistry: map<uint256, address>        // hash(jettonMaster, denom) -> jetton pool addr
@@ -23,10 +32,12 @@ struct CreateSenders {
 }
 
 struct FactoryStorage {
-    poolCode: cell    // jetton pool code, set at deploy
-    tonPoolCode: cell // TON pool code, set at deploy
+    // vNext deployment-only layout. Legacy Factory data is intentionally not
+    // decoded or migrated in place; changing these fields changes the address.
+    codes: Cell<FactoryCodes>
     poolCount: uint32
     tonPoolCount: uint32
+    inFlightCreates: uint16
     registries: Cell<Registries>
     createSenders: Cell<CreateSenders>
 }
@@ -58,7 +69,11 @@ struct (0xa0c0c0c2) CreateTonPool {
     denomination: coins
 }
 
-type AllowedFactoryMessage = CreatePool | CreateTonPool
+// Local ABI alias keeps generated Factory wrappers self-contained even when
+// the underlying shared handshake type lives in deployment-types.tolk.
+type FactoryPoolDeployConfirmed = PoolDeployConfirmed
+
+type AllowedFactoryMessage = CreatePool | CreateTonPool | FactoryPoolDeployConfirmed
 
 // jettonMaster is null for TON pools.
 struct (0x00c0c0c0) FactoryPoolCreatedEvent {

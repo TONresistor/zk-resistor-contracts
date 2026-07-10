@@ -81,6 +81,25 @@ if (!(await snarkjs.groth16.verify(insertVk, psi, pi)))
     throw new Error("insert proof failed snarkjs verify");
 console.log("[insert] snarkjs verify ✓");
 
+// --- SECOND INSERT proof: insert a distinct commitment at leaf 1 ---
+// This keeps IC[4] observable in the on-chain verifier. A fixture only at
+// leafIndex 0 multiplies the leaf-index verification-key point by zero and
+// cannot detect an IC[3]/IC[4] selection regression.
+const secondNullifier = 0xb1c2d3e4n;
+const secondSecret = 0x234567890abcn;
+const secondCommitment = BigInt(await poseidon2(secondNullifier, secondSecret));
+const secondInsertW = await insertWitness([commitment], secondCommitment, 1);
+const { proof: piSecond, publicSignals: psiSecond } = await snarkjs.groth16.fullProve(
+    secondInsertW,
+    INSERT_WASM,
+    INSERT_ZKEY,
+);
+if (!(await snarkjs.groth16.verify(insertVk, psiSecond, piSecond)))
+    throw new Error("second insert proof failed snarkjs verify");
+if (BigInt(secondInsertW.oldRoot) !== BigInt(insertW.newRoot))
+    throw new Error("second insert fixture does not extend the first insert root");
+console.log("[insert leaf 1] snarkjs verify ✓");
+
 // --- WITHDRAW proof: prove (nullifier, secret) for the commitment at leaf 0 ---
 const ww = await withdrawWitness({
     leaves: [],
@@ -129,6 +148,20 @@ const lines = [
     emitG1Slice("fixtureInsertProofC", g1ToChunks(pi.pi_c)),
     ``,
     `// =========================================================`,
+    `// SECOND INSERT: extends the first root at leafIndex = 1`,
+    `// =========================================================`,
+    `const FIXTURE_SECOND_INSERT_OLD_ROOT: uint256 = ${secondInsertW.oldRoot}`,
+    `const FIXTURE_SECOND_INSERT_NEW_ROOT: uint256 = ${secondInsertW.newRoot}`,
+    `const FIXTURE_SECOND_INSERT_COMMITMENT: uint256 = ${secondInsertW.commitment}`,
+    `const FIXTURE_SECOND_INSERT_LEAF_INDEX: uint32 = ${secondInsertW.leafIndex}`,
+    ``,
+    emitG1Slice("fixtureSecondInsertProofA", g1ToChunks(piSecond.pi_a)),
+    ``,
+    emitG2Slice("fixtureSecondInsertProofB", g2ToChunks(piSecond.pi_b)),
+    ``,
+    emitG1Slice("fixtureSecondInsertProofC", g1ToChunks(piSecond.pi_c)),
+    ``,
+    `// =========================================================`,
     `// WITHDRAW: proves commitment in tree with matching nullifier`,
     `// =========================================================`,
     `const FIXTURE_WITHDRAW_ROOT: uint256 = ${ww.root}`,
@@ -150,5 +183,5 @@ const lines = [
 
 writeFileSync(OUT_FILE, lines.join("\n") + "\n");
 console.log(`\n✓ wrote ${OUT_FILE}`);
-console.log(`  Use in tests/RealProof.test.tolk with MOCK_VERIFIER=false`);
+console.log(`  Use in tests/RealProof.test.tolk with the production verifier`);
 process.exit(0);

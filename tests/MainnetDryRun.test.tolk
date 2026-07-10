@@ -6,7 +6,10 @@ import "@contracts/constants"
 import "@contracts/errors"
 import "@contracts/factory-types"
 import "@contracts/pool-types"
+import "@contracts/sparse-set"
+import "@tests/pool-sparse-helpers"
 import "@tests/proofs-fixture"
+import "@tests/ton-pool-sparse-helpers"
 import "@wrappers/Factory.gen"
 import "@wrappers/Pool.gen"
 import "@wrappers/TonPool.gen"
@@ -55,6 +58,10 @@ fun depositPayloadCell(): cell {
         commitment: FIXTURE_INSERT_COMMITMENT,
         newRoot: FIXTURE_INSERT_NEW_ROOT,
         insertProof: realInsertProof().toCell(),
+        commitmentSetProof: poolEmptySparseSetProof(
+            SPARSE_SET_COMMITMENT_DOMAIN,
+            FIXTURE_INSERT_COMMITMENT,
+        ).toCell(),
     };
     return payload.toCell();
 }
@@ -74,14 +81,17 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
     };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     val factory = Factory.fromStorage({
-        poolCode: build("Pool"),
-        tonPoolCode: build("TonPool"),
+        codes: (FactoryCodes {
+            poolCode: build("Pool"),
+            tonPoolCode: build("TonPool"),
+        }).toCell(),
         poolCount: 0,
         tonPoolCount: 0,
+        inFlightCreates: 0,
         registries: registries.toCell(),
         createSenders: createSenders.toCell(),
     });
-    val deployRes = factory.deploy(deployer.address, { value: ton("0.2") });
+    val deployRes = factory.deploy(deployer.address, { value: ton("0.5") });
     expect(deployRes).toHaveSuccessfulDeploy({ to: factory.address });
     expect(factory.poolCount()).toEqual(0);
     expect(factory.tonPoolCount()).toEqual(0);
@@ -160,14 +170,14 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
     val _recipientBalBefore = testing.getAccountBalance(recipient);
     val relayerBalBefore = testing.getAccountBalance(relayer.address);
 
-    val wdRes = pool.sendWithdraw(
+    val wdRes = pool.sendWithdrawWithEmptySparseProof(
         relayer.address,
         200,
         FIXTURE_WITHDRAW_ROOT,
         FIXTURE_WITHDRAW_NULLIFIER_HASH,
         recipient,
         realWithdrawProof(),
-        { value: MIN_WITHDRAW_GAS },
+        { value: MIN_JETTON_WITHDRAW_GAS },
     );
     expect(wdRes).toHaveSuccessfulTx({ to: pool.address });
     expect(pool.relayerReserve()).toEqual(0);
@@ -185,7 +195,7 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
         to: relayer.address, // RELAYER_REIMBURSEMENT in TON
     });
 
-    // Relayer attached MIN_WITHDRAW_GAS, receives everything above
+    // Relayer attached MIN_JETTON_WITHDRAW_GAS, receives everything above
     // POOL_TON_RESERVE: released RELAYER_REIMBURSEMENT plus any pool buffer
     // (deploy seed + prior handler-gas residuals).
     val relayerNet = testing.getAccountBalance(relayer.address) - relayerBalBefore;
@@ -193,7 +203,7 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
 
     // === STEP 6: Deposit on TON pool (real proof) =====================
     val tonUser = testing.treasury("ton-user");
-    val tonDepRes = tonPool.sendTonDepositPayload(
+    val tonDepRes = tonPool.sendTonDepositWithEmptySparseProof(
         tonUser.address,
         300,
         tonUser.address,
@@ -209,7 +219,7 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
 
     // === STEP 7: Withdraw on TON pool (real proof) ====================
     val tonRecipientBalBefore = testing.getAccountBalance(recipient);
-    val tonWdRes = tonPool.sendTonWithdraw(
+    val tonWdRes = tonPool.sendTonWithdrawWithEmptySparseProof(
         relayer.address,
         400,
         FIXTURE_WITHDRAW_ROOT,
@@ -228,12 +238,13 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
     expect(tonRecipientDelta <= TEST_TON_DENOM).toEqual(true);
 
     // No admin in this protocol: factory accumulates nothing from pool ops.
-    // Each CreatePool forwards the entire inbound value to the new pool via
-    // CARRY_ALL_REMAINING_MESSAGE_VALUE; pools do not forward back to factory.
-    // Factory keeps only its initial deploy seed (minus gradual storage rent).
+    // Each create retains only its bounded registry allocation; pools do not
+    // forward operational revenue back to Factory.
     val factoryBalEnd = testing.getAccountBalance(factory.address);
     expect(factoryBalEnd >= FACTORY_TON_RESERVE).toEqual(true);
-    expect(factoryBalEnd <= ton("0.25")).toEqual(true);
+    expect(
+        factoryBalEnd <= ton("0.5") + FACTORY_CREATE_RETAINED_VALUE * 2 + ton("0.02"),
+    ).toEqual(true);
 }
 
 get fun `test MAINNET-DRY-RUN: TonPool with bad denom rejected at factory`() {
@@ -246,15 +257,18 @@ get fun `test MAINNET-DRY-RUN: TonPool with bad denom rejected at factory`() {
     };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     val factory = Factory.fromStorage({
-        poolCode: build("Pool"),
-        tonPoolCode: build("TonPool"),
+        codes: (FactoryCodes {
+            poolCode: build("Pool"),
+            tonPoolCode: build("TonPool"),
+        }).toCell(),
         poolCount: 0,
         tonPoolCount: 0,
+        inFlightCreates: 0,
         registries: registries.toCell(),
         createSenders: createSenders.toCell(),
     });
     expect(
-        factory.deploy(deployer.address, { value: ton("0.2") }),
+        factory.deploy(deployer.address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: factory.address });
 
     // 42 TON is not in the whitelist {10, 100, 1000, 10000}.

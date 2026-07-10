@@ -1,8 +1,3 @@
-// When true, the verifier short-circuits to `return true` and bypasses the
-// on-chain pairing. This is a local-only escape hatch; mainnet and CI builds
-// MUST keep it false.
-const MOCK_VERIFIER: bool = false
-
 // Lower 248 bits of an address hash, used as the field-element binding for
 // the recipient in the withdraw circuit. 248 bits fit safely inside the
 // BLS12-381 Fr field (255 bits) and match the frontend's encoding.
@@ -33,20 +28,25 @@ const ROOT_HISTORY_SIZE: int = 100
 // rest back to the broadcaster.
 const MIN_WITHDRAW_GAS: coins = 100000000 // 0.10 TON
 
-// Storage reserves: minimum balance each contract retains at all times.
-const POOL_TON_RESERVE: coins = 50000000 // 0.05 TON
-const FACTORY_TON_RESERVE: coins = 100000000 // 0.10 TON
+// Factory base runway: more than twice the measured ten-year storage cost of
+// the empty v2 Factory StateInit (0.362488844 TON at the release config).
+const POOL_TON_RESERVE: coins = 50000000 // legacy compatibility; v2 uses poolRentRunway()
+const FACTORY_TON_RESERVE: coins = 370000000 // 0.37 TON
 
 // Each deposit earmarks this amount into the pool's relayerReserve; the
 // matching withdraw releases it to the tx sender. The relayer is not bound
 // in the proof, so anyone broadcasting a published proof earns it.
 const RELAYER_REIMBURSEMENT: coins = 300000000 // 0.30 TON
 
-// Minimum TON value the factory must receive on CreatePool / CreateTonPool.
-// Budget: factory rent reserve (REGISTRY_RENT_PER_POOL) + pool deploy +
-// InitWalletBinding handler + outbound TEP-89 query + POOL_TON_RESERVE seed
-// + safety buffer. CreateTonPool has no TEP-89 step but shares the floor.
-const MIN_CREATE_POOL_FEE: coins = 200000000 // 0.20 TON
+// A Jetton create funds the TEP-89 query before the authenticated master
+// response activates the Pool. Native TON pools do not need that handshake.
+const MIN_CREATE_JETTON_POOL_FEE: coins = 450000000 // 0.45 TON
+const MIN_CREATE_TON_POOL_FEE: coins = 450000000 // 0.45 TON
+
+// Kept from the current create message only. This funds the 0.02 TON registry
+// allocation plus Factory compute/action fees; all other current-message value
+// is forwarded explicitly, without sweeping prior donations.
+const FACTORY_CREATE_RETAINED_VALUE: coins = 40000000 // 0.04 TON
 
 // Retained by the factory per CreatePool to fund storage rent for the pool's
 // index entries (forward, reverse, create-sender). Caps the slow-burn
@@ -55,22 +55,14 @@ const MIN_CREATE_POOL_FEE: coins = 200000000 // 0.20 TON
 const REGISTRY_RENT_PER_POOL: coins = 20000000 // 0.02 TON
 
 // Minimum TON a deposit must attach beyond the denomination. Splits as
-// RELAYER_REIMBURSEMENT (0.30) + handler gas (~0.02). Any excess is
-// refunded to msg.fromUser.
-const MIN_DEPOSIT_VALUE: coins = 320000000 // 0.32 TON
+// RELAYER_REIMBURSEMENT (0.30) + worst integrated sparse handler/event gas
+// + progressive rent for a new history slot and commitment bucket. Any excess
+// is refunded to msg.fromUser.
+const MIN_DEPOSIT_VALUE: coins = 370000000 // 0.37 TON
 
 // Shared opcodes used outside their `struct (0x...)` definitions.
 const OP_JETTON_TRANSFER: int = 0x0f8a7ea5
-const OP_DEPOSIT_PAYLOAD: int = 0xd6e05111
-
-// Outgoing withdrawal transfers use the high query-id bit as a domain tag.
-// Deposit refunds always clear it. This lets the bounce handler distinguish
-// retryable payouts from refunds without trusting user-controlled opcodes.
-const JETTON_WITHDRAW_QUERY_DOMAIN: uint64 = 1 << 63
-const JETTON_QUERY_ID_MASK: uint64 = (1 << 63) - 1
-
-// Gas budget for outgoing jetton transfers (paid in TON).
-const JETTON_TRANSFER_GAS: coins = 50000000 // 0.05 TON
+const OP_DEPOSIT_PAYLOAD: int = 0xd6e05112
 
 // Whitelisted TON pool denominations. Bounded set so anonymity sets
 // concentrate at a few standard sizes.

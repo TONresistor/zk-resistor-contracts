@@ -1,9 +1,13 @@
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
+import "@acton/types/message"
+import "@acton/types/transaction"
 import "@contracts/constants"
 import "@contracts/errors"
 import "@contracts/pool-types"
+import "@contracts/sparse-set"
+import "@tests/sparse-set-helpers"
 import "@wrappers/Pool.gen"
 
 const TEST_DENOMINATION: coins = 100
@@ -20,15 +24,14 @@ fun freshPool(jettonWallet: address): Pool {
         nextIndex: 0,
         currentRoot: 0,
         rootHistory: [],
-        nullifiers: [],
-        commitments: [],
+        sparseSets: createEmptySparseSetRoots(),
     };
     return Pool.fromStorage({
         identity: identity.toCell(),
         jettonWallet, // pre-set for these tests; in prod the factory sets it
         relayerReserve: 0,
         merkle: merkle.toCell(),
-        withdrawals: [],
+        withdrawalCount: 0,
     });
 }
 
@@ -53,6 +56,7 @@ get fun `test deploy succeeds and exposes initial getters`() {
     expect(pool.jettonWallet()).toEqual(jettonWallet);
     expect(pool.currentRoot()).toEqual(0);
     expect(pool.nextIndex()).toEqual(0);
+    expect(pool.withdrawalCount()).toEqual(0);
     expect(pool.treeDepth()).toEqual(MERKLE_TREE_DEPTH);
 }
 
@@ -121,6 +125,9 @@ get fun `test withdraw with insufficient gas is rejected`() {
         0,
         anyone.address,
         zeroProof,
+        SparseSetUpdateProof.fromCell(
+            newSparseSetTestTree(SPARSE_SET_NULLIFIER_DOMAIN).proofFor(0),
+        ),
         { value: ton("0.05") },
     );
 
@@ -129,28 +136,6 @@ get fun `test withdraw with insufficient gas is rejected`() {
         to: pool.address,
         exitCode: Errors.InsufficientGas,
     });
-}
-
-get fun `test withdraw queryId domain bit is reserved`() {
-    val (pool, _, _) = setupDeployedPool();
-    val anyone = testing.treasury("anyone");
-    val zeroProof: ZkProof = {
-        proofA: (G1Point { raw: createEmptySlice() }).toCell(),
-        proofB: (G2Point { raw: createEmptySlice() }).toCell(),
-        proofC: (G1Point { raw: createEmptySlice() }).toCell(),
-    };
-
-    expect(
-        pool.sendWithdraw(
-            anyone.address,
-            1 << 63,
-            0,
-            0,
-            anyone.address,
-            zeroProof,
-            { value: MIN_WITHDRAW_GAS },
-        ),
-    ).toHaveFailedTx({ to: pool.address, exitCode: Errors.InvalidQueryId });
 }
 
 get fun `test unknown non-empty message is rejected`() {
@@ -206,6 +191,16 @@ get fun `test refund deposit emits jetton refund without factory forward`() {
         to: jettonWallet,
         opcode: 0x0f8a7ea5,
     });
+    val refundTx = res.findTransaction<JettonTransfer>({
+        from: pool.address,
+        to: jettonWallet,
+    })!;
+    val refundMessage = refundTx.loadInMsg<JettonTransfer>();
+    if (refundMessage.info is TlbInternalMessage) {
+        expect(refundMessage.info.bounce).toEqual(false);
+    } else {
+        expect(false).toEqual(true);
+    }
     // Factory balance is unchanged: no admin-fee forward in this model.
     val factoryBalAfter = testing.getAccountBalance(factoryAddr);
     expect(factoryBalAfter).toEqual(factoryBalBefore);

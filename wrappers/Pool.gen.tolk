@@ -6,6 +6,7 @@
 import "@acton/build"
 import "@acton/emulation/network"
 import "@acton/testing/assert"
+import "@contracts/deployment-types"
 import "@contracts/pool-types"
 
 /// Storage `Storage` is defined in `@contracts/pool-types`
@@ -38,6 +39,21 @@ fun Pool.deploy(self, from: address, config: SendParams = {}): SendResultList {
         bounce: config.bounce,
         value: config.value,
         dest: { stateInit: self.stateInit },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun Pool.sendConfirmPoolDeployment(
+    self,
+    from: address,
+    queryId: uint64,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: ConfirmPoolDeployment { queryId },
     });
     return net.send(from, genericMsg);
 }
@@ -95,11 +111,12 @@ fun Pool.sendJettonTransferNotification(
 fun Pool.sendWithdraw(
     self,
     from: address,
-    queryId: uint64,
+    clientQueryId: uint64,
     root: uint256,
     nullifierHash: uint256,
     recipient: address,
     proof: ZkProof,
+    nullifierSetProof: PoolSparseSetUpdateProof,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
@@ -107,11 +124,12 @@ fun Pool.sendWithdraw(
         value: config.value,
         dest: self.address,
         body: Withdraw {
-            queryId,
+            clientQueryId,
             root,
             nullifierHash,
             recipient,
             proof: proof.toCell(),
+            nullifierSetProof: nullifierSetProof.toCell(),
         },
     });
     return net.send(from, genericMsg);
@@ -156,8 +174,16 @@ fun Pool.relayerReserve(self): coins {
     return net.runGetMethod(self.address, "relayerReserve");
 }
 
-fun Pool.isWithdrawalRetryable(self, queryId: uint64): bool {
-    return net.runGetMethod(self.address, "isWithdrawalRetryable", [queryId]);
+fun Pool.rentRunway(self): coins {
+    return net.runGetMethod(self.address, "rentRunway");
+}
+
+fun Pool.sparseRoot(self, domain: uint32, bucketId: uint8): uint256 {
+    return net.runGetMethod(self.address, "sparseRoot", [domain, bucketId]);
+}
+
+fun Pool.withdrawalCount(self): uint32 {
+    return net.runGetMethod(self.address, "withdrawalCount");
 }
 
 fun Pool.treeDepth(self): int {

@@ -6,6 +6,7 @@
 import "@acton/build"
 import "@acton/emulation/network"
 import "@acton/testing/assert"
+import "@contracts/deployment-types"
 import "@contracts/factory-types"
 
 /// Storage `FactoryStorage` is defined in `@contracts/factory-types`
@@ -75,6 +76,23 @@ fun Factory.sendCreateTonPool(
     return net.send(from, genericMsg);
 }
 
+fun Factory.sendPoolDeployConfirmed(
+    self,
+    from: address,
+    queryId: uint64,
+    jettonMaster: address?,
+    denomination: coins,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: PoolDeployConfirmed { queryId, jettonMaster, denomination },
+    });
+    return net.send(from, genericMsg);
+}
+
 /// Send message to the contract with a custom body cell
 fun Factory.sendAny(self, from: address, body: cell, config: SendParams = {}): SendResultList {
     val genericMsg = createMessage({
@@ -90,12 +108,36 @@ fun Factory.poolCount(self): uint32 {
     return net.runGetMethod(self.address, "poolCount");
 }
 
+fun Factory.totalPoolCount(self): uint32 {
+    return net.runGetMethod(self.address, "totalPoolCount");
+}
+
+fun Factory.inFlightCreateCount(self): uint16 {
+    return net.runGetMethod(self.address, "inFlightCreateCount");
+}
+
+fun Factory.maxFactoryPools(self): uint32 {
+    return net.runGetMethod(self.address, "maxFactoryPools");
+}
+
+fun Factory.maxInFlightCreates(self): uint16 {
+    return net.runGetMethod(self.address, "maxInFlightCreates");
+}
+
+fun Factory.pendingCreateSender(self, poolAddress: address): address? {
+    return net.runGetMethod(self.address, "pendingCreateSender", [poolAddress]);
+}
+
 fun Factory.poolAddressFor(self, jettonMaster: address, denomination: coins): address? {
     return net.runGetMethod(self.address, "poolAddressFor", [jettonMaster, denomination]);
 }
 
 fun Factory.expectedPoolAddress(self, jettonMaster: address, denomination: coins): address {
     return net.runGetMethod(self.address, "expectedPoolAddress", [jettonMaster, denomination]);
+}
+
+fun Factory.poolDeploymentPending(self, jettonMaster: address, denomination: coins): bool {
+    return net.runGetMethod(self.address, "poolDeploymentPending", [jettonMaster, denomination]);
 }
 
 fun Factory.tonPoolCount(self): uint32 {
@@ -108,4 +150,8 @@ fun Factory.tonPoolAddressFor(self, denomination: coins): address? {
 
 fun Factory.expectedTonPoolAddress(self, denomination: coins): address {
     return net.runGetMethod(self.address, "expectedTonPoolAddress", [denomination]);
+}
+
+fun Factory.tonPoolDeploymentPending(self, denomination: coins): bool {
+    return net.runGetMethod(self.address, "tonPoolDeploymentPending", [denomination]);
 }

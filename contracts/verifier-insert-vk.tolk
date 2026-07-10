@@ -63,6 +63,7 @@ fun vkInsertDelta2(): slice {
         .beginParse();
 }
 
+@pure
 fun vkInsertIc(i: int): slice {
     // Auto-generated from vk/insert_vk.json
     if (i == 0) {
@@ -117,18 +118,17 @@ fun vkInsertIc(i: int): slice {
             .endCell()
             .beginParse();
     }
-    if (i == 4) {
-        return beginCell()
-            .storeUint(162307271539659, 48)
-            .storeUint(22773943595418, 48)
-            .storeUint(120656835136931, 48)
-            .storeUint(15411885989726, 48)
-            .storeUint(213931665803125, 48)
-            .storeUint(74337667274741, 48)
-            .storeUint(121571803247937, 48)
-            .storeUint(103403396268713, 48)
-            .endCell()
-            .beginParse();
-    }
-    throw 0xFFFE; // unreachable for valid index
+    // Verifier callers use the fixed circuit arity, so the last IC
+    // point is the exhaustive final case.
+    return beginCell()
+        .storeUint(162307271539659, 48)
+        .storeUint(22773943595418, 48)
+        .storeUint(120656835136931, 48)
+        .storeUint(15411885989726, 48)
+        .storeUint(213931665803125, 48)
+        .storeUint(74337667274741, 48)
+        .storeUint(121571803247937, 48)
+        .storeUint(103403396268713, 48)
+        .endCell()
+        .beginParse();
 }

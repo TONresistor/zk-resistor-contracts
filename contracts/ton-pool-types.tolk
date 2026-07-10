@@ -1,4 +1,18 @@
+import "errors"
 import "pool-types" // for MerkleState (shared with jetton pool)
+import "sparse-set"
+
+// Acton 1.0.0 wrappers import only this direct ABI module. Local aliases keep
+// the generated wrapper self-contained while preserving the exact cell layout.
+type TonPoolZkProof = ZkProof
+
+type TonPoolSparseSetUpdateProof = SparseSetUpdateProof
+
+// Local wire-equivalent declaration keeps Acton 1.0.0's generated wrapper
+// independent from transitive imports.
+struct (0x46504300) TonPoolConfirmPoolDeployment {
+    queryId: uint64
+}
 
 // ============================================================================
 // STORAGE
@@ -29,48 +43,56 @@ fun TonPoolStorage.save(self) {
     contract.setData(self.toCell());
 }
 
+fun calculateTonPoolWithdrawalCount(
+    denomination: coins,
+    deposits: uint32,
+    pendingWithdrawTon: coins,
+): uint32 {
+    assert (denomination > 0) throw Errors.InvalidDenomination;
+    assert (pendingWithdrawTon % denomination == 0) throw Errors.FactoryInvariantViolation;
+    val pendingCount = pendingWithdrawTon / denomination;
+    assert (pendingCount <= deposits) throw Errors.FactoryInvariantViolation;
+    return deposits - (pendingCount as uint32);
+}
+
 // ============================================================================
 // MESSAGES
 // ============================================================================
 
 // Direct TON deposit. Requires msg.value >= denomination + MIN_DEPOSIT_VALUE;
 // below the floor, the pool refunds the full TON value to fromUser.
-struct (0xd6e05111) TonDepositPayload {
+struct (0xd6e05112) TonDepositPayload {
     queryId: uint64
     fromUser: address
     commitment: uint256
     newRoot: uint256
-    insertProof: Cell<ZkProof>
+    insertProof: Cell<TonPoolZkProof>
+    commitmentSetProof: Cell<TonPoolSparseSetUpdateProof>
 }
 
 // Same body / circuit as jetton Pool's Withdraw.
-struct (0x4b6f0b50) TonWithdraw {
+struct (0x4b6f0b51) TonWithdraw {
     queryId: uint64
     root: uint256
     nullifierHash: uint256
     recipient: address
-    proof: Cell<ZkProof>
+    proof: Cell<TonPoolZkProof>
+    nullifierSetProof: Cell<TonPoolSparseSetUpdateProof>
 }
 
-// Legacy failure-event ABI retained for negative tests; current refund paths
-// do not emit contract-funded failure logs.
-struct (0x00def000) TonDepositRefundedEvent {
-    fromUser: address
-    amount: coins
-    reason: uint16
-}
-
-struct (0x00de9051) TonDepositEvent {
+struct (0x00de9052) TonDepositEvent {
     leafIndex: uint32
     commitment: uint256
     newRoot: uint256
     fromUser: address
+    sparseUpdate: Cell<SparseSetEventUpdate>
 }
 
-struct (0x00717d3a) TonWithdrawEvent {
+struct (0x00717d3b) TonWithdrawEvent {
     nullifierHash: uint256
     recipient: address
     payout: coins
+    sparseUpdate: Cell<SparseSetEventUpdate>
 }
 
 // ============================================================================
@@ -78,5 +100,6 @@ struct (0x00717d3a) TonWithdrawEvent {
 // ============================================================================
 
 type AllowedTonMessage =
+    | TonPoolConfirmPoolDeployment
     | TonDepositPayload
     | TonWithdraw

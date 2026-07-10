@@ -25,13 +25,17 @@ enum Errors {
     InvalidWithdrawProof = 124
     InsufficientReserve = 127
     InsufficientBalance = 128
-    InvalidQueryId = 129
     InvalidRecipient = 130
-    WithdrawalNotRetryable = 131
-    InvalidRetry = 132
+    StaleSparseSetRoot = 133
+    InvalidSparseSetProof = 134
+    WithdrawalCapacityReached = 135
 
     // Factory
     PoolAlreadyExists = 200
     InvalidDenomination = 202
     InsufficientCreatePoolFee = 203
+    FactoryCapacityReached = 204
+    TooManyInFlightCreates = 205
+    InvalidPoolConfirmation = 206
+    FactoryInvariantViolation = 207
 }

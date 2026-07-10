@@ -6,7 +6,6 @@
 import "@acton/build"
 import "@acton/emulation/network"
 import "@acton/testing/assert"
-import "@contracts/pool-types"
 import "@contracts/ton-pool-types"
 
 /// Storage `TonPoolStorage` is defined in `@contracts/ton-pool-types`
@@ -43,6 +42,21 @@ fun TonPool.deploy(self, from: address, config: SendParams = {}): SendResultList
     return net.send(from, genericMsg);
 }
 
+fun TonPool.sendTonPoolConfirmPoolDeployment(
+    self,
+    from: address,
+    queryId: uint64,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: TonPoolConfirmPoolDeployment { queryId },
+    });
+    return net.send(from, genericMsg);
+}
+
 fun TonPool.sendTonDepositPayload(
     self,
     from: address,
@@ -50,7 +64,8 @@ fun TonPool.sendTonDepositPayload(
     fromUser: address,
     commitment: uint256,
     newRoot: uint256,
-    insertProof: ZkProof,
+    insertProof: TonPoolZkProof,
+    commitmentSetProof: TonPoolSparseSetUpdateProof,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
@@ -63,6 +78,7 @@ fun TonPool.sendTonDepositPayload(
             commitment,
             newRoot,
             insertProof: insertProof.toCell(),
+            commitmentSetProof: commitmentSetProof.toCell(),
         },
     });
     return net.send(from, genericMsg);
@@ -75,7 +91,8 @@ fun TonPool.sendTonWithdraw(
     root: uint256,
     nullifierHash: uint256,
     recipient: address,
-    proof: ZkProof,
+    proof: TonPoolZkProof,
+    nullifierSetProof: TonPoolSparseSetUpdateProof,
     config: SendParams = {},
 ): SendResultList {
     val genericMsg = createMessage({
@@ -88,6 +105,7 @@ fun TonPool.sendTonWithdraw(
             nullifierHash,
             recipient,
             proof: proof.toCell(),
+            nullifierSetProof: nullifierSetProof.toCell(),
         },
     });
     return net.send(from, genericMsg);
@@ -120,12 +138,24 @@ fun TonPool.nextIndex(self): uint32 {
     return net.runGetMethod(self.address, "nextIndex");
 }
 
+fun TonPool.sparseRoot(self, domain: uint32, bucketId: uint8): uint256 {
+    return net.runGetMethod(self.address, "sparseRoot", [domain, bucketId]);
+}
+
+fun TonPool.rentRunway(self): coins {
+    return net.runGetMethod(self.address, "rentRunway");
+}
+
 fun TonPool.relayerReserve(self): coins {
     return net.runGetMethod(self.address, "relayerReserve");
 }
 
 fun TonPool.pendingWithdrawTon(self): coins {
     return net.runGetMethod(self.address, "pendingWithdrawTon");
+}
+
+fun TonPool.withdrawalCount(self): uint32 {
+    return net.runGetMethod(self.address, "withdrawalCount");
 }
 
 fun TonPool.treeDepth(self): int {

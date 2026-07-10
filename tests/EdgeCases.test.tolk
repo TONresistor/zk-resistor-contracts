@@ -1,3 +1,5 @@
+import "@stdlib/exotic-cells"
+import "@acton/io"
 import "@acton/emulation/network"
 import "@acton/emulation/testing"
 import "@acton/testing/expect"
@@ -6,7 +8,11 @@ import "@acton/types/transaction"
 import "@contracts/constants"
 import "@contracts/errors"
 import "@contracts/pool-types"
+import "@contracts/sparse-set"
 import "@contracts/ton-pool-types"
+import "@tests/pool-sparse-helpers"
+import "@tests/proofs-fixture"
+import "@tests/ton-pool-sparse-helpers"
 import "@wrappers/Pool.gen"
 import "@wrappers/TonPool.gen"
 
@@ -16,18 +22,26 @@ import "@wrappers/TonPool.gen"
 // These exercise refund branches, lifecycle guards, and bounce handling that
 // the happy-path E2E + MainnetDryRun suites don't reach. Storage is forged
 // directly via `fromStorage` so we can hit branches that require state the
-// happy-path setup cannot produce (e.g. tree at capacity, pre-existing
-// commitment, jettonWallet still null after deploy).
+// happy-path setup cannot produce (e.g. tree at capacity, an occupied sparse
+// commitment bucket, or jettonWallet still null after deploy).
 // ============================================================================
 
 const EDGE_DENOM: coins = 100
 
-get fun `test jetton withdrawal query domain keeps high bit reserved`() {
-    expect(JETTON_QUERY_ID_MASK + 1).toEqual(JETTON_WITHDRAW_QUERY_DOMAIN);
-    expect(JETTON_QUERY_ID_MASK & JETTON_WITHDRAW_QUERY_DOMAIN).toEqual(0);
+fun forgePoolWithSparseSets(
+    jw: address?,
+    nextIdx: uint32,
+    sparseSets: Cell<SparseSetRoots>,
+): Pool {
+    return forgePoolWithState(jw, nextIdx, 0, sparseSets);
 }
 
-fun forgePool(jw: address?, nextIdx: uint32, commitments: map<uint256, uint32>): Pool {
+fun forgePoolWithState(
+    jw: address?,
+    nextIdx: uint32,
+    currentRoot: uint256,
+    sparseSets: Cell<SparseSetRoots>,
+): Pool {
     val identity: PoolIdentity = {
         jettonMaster: testing.treasury("jm").address,
         factory: testing.treasury("factory").address,
@@ -35,31 +49,41 @@ fun forgePool(jw: address?, nextIdx: uint32, commitments: map<uint256, uint32>):
     };
     val merkle: MerkleState = {
         nextIndex: nextIdx,
-        currentRoot: 0,
+        currentRoot,
         rootHistory: [],
-        nullifiers: [],
-        commitments,
+        sparseSets,
     };
     return Pool.fromStorage({
         identity: identity.toCell(),
         jettonWallet: jw,
         relayerReserve: 0,
         merkle: merkle.toCell(),
-        withdrawals: [],
+        withdrawalCount: 0,
     });
 }
 
-fun forgeTonPool(nextIdx: uint32, commitments: map<uint256, uint32>): TonPool {
+fun forgePool(jw: address?, nextIdx: uint32): Pool {
+    return forgePoolWithSparseSets(jw, nextIdx, createEmptySparseSetRoots());
+}
+
+fun forgeTonPoolWithSparseSets(nextIdx: uint32, sparseSets: Cell<SparseSetRoots>): TonPool {
+    return forgeTonPoolWithState(nextIdx, 0, sparseSets);
+}
+
+fun forgeTonPoolWithState(
+    nextIdx: uint32,
+    currentRoot: uint256,
+    sparseSets: Cell<SparseSetRoots>,
+): TonPool {
     val identity: TonPoolIdentity = {
         factory: testing.treasury("factory").address,
         denomination: ton("10"),
     };
     val merkle: MerkleState = {
         nextIndex: nextIdx,
-        currentRoot: 0,
+        currentRoot,
         rootHistory: [],
-        nullifiers: [],
-        commitments,
+        sparseSets,
     };
     return TonPool.fromStorage({
         identity: identity.toCell(),
@@ -67,6 +91,10 @@ fun forgeTonPool(nextIdx: uint32, commitments: map<uint256, uint32>): TonPool {
         pendingWithdrawTon: 0,
         merkle: merkle.toCell(),
     });
+}
+
+fun forgeTonPool(nextIdx: uint32): TonPool {
+    return forgeTonPoolWithSparseSets(nextIdx, createEmptySparseSetRoots());
 }
 
 // ============================================================================
@@ -78,7 +106,7 @@ get fun `test Pool TakeWalletAddress is rejected when wallet already bound`() {
     val deployer = testing.treasury("deployer");
 
     // Forge a pool that already has its jettonWallet bound.
-    val pool = forgePool(jw, 0, []);
+    val pool = forgePool(jw, 0);
     expect(
         pool.deploy(deployer.address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -103,7 +131,7 @@ get fun `test Pool TakeWalletAddress is rejected when wallet already bound`() {
 }
 
 get fun `test Pool TakeWalletAddress from non-jettonMaster is rejected`() {
-    val pool = forgePool(null, 0, []);
+    val pool = forgePool(null, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -125,25 +153,47 @@ get fun `test Pool TakeWalletAddress from non-jettonMaster is rejected`() {
     expect(pool.jettonWallet()).toEqual(null);
 }
 
-get fun `test Pool InitWalletBinding is idempotent once bound`() {
-    val jw = testing.treasury("jw").address;
-    val pool = forgePool(jw, 0, []);
+get fun `test Pool binds the master-provided wallet once and confirms readiness`() {
+    val pool = forgePool(null, 0);
+    val master = testing.treasury("jm");
+    val factory = testing.treasury("factory");
+    val wallet = testing.treasury("bound-wallet");
     expect(
-        pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
+        pool.deploy(testing.treasury("binding-deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
 
-    // Already bound: a late retrigger by anyone is accepted as a no-op
-    // (no provide_wallet_address sent, no state change).
-    val anyone = testing.treasury("anyone");
-    val res = pool.sendInitWalletBinding(anyone.address, 1, { value: ton("0.1") });
-    expect(res).toHaveSuccessfulTx({ from: anyone.address, to: pool.address });
-    expect(pool.jettonWallet()).toEqual(jw);
-    expect(res).toNotHaveTx({ from: pool.address, to: testing.treasury("jm").address });
+    val result = pool.sendTakeWalletAddress(
+        master.address,
+        42,
+        wallet.address,
+        createEmptySlice(),
+        { value: ton("0.1") },
+    );
+    expect(result).toHaveSuccessfulTx({ from: master.address, to: pool.address });
+    expect(pool.jettonWallet()).toEqual(wallet.address);
+    expect(
+        result.findExternalOutMessage<PoolReadyEvent>({ from: pool.address }) != null,
+    ).toEqual(true);
+    expect(result).toHaveSuccessfulTx({
+        from: pool.address,
+        to: factory.address,
+        opcode: 0x46504301,
+    });
+
+    expect(
+        pool.sendTakeWalletAddress(
+            master.address,
+            43,
+            testing.treasury("second-wallet").address,
+            createEmptySlice(),
+            { value: ton("0.1") },
+        ),
+    ).toHaveFailedTx({ to: pool.address, exitCode: Errors.JettonWalletAlreadySet });
 }
 
 get fun `test Pool InitWalletBinding sends TEP-89 query when wallet is null`() {
     val masterAddr = testing.treasury("jm").address;
-    val pool = forgePool(null, 0, []);
+    val pool = forgePool(null, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -162,7 +212,7 @@ get fun `test Pool InitWalletBinding sends TEP-89 query when wallet is null`() {
     })!;
     val queryMessage = queryTx.loadInMsg<ProvideWalletAddress>();
     if (queryMessage.info is TlbInternalMessage) {
-        expect(queryMessage.info.bounce).toEqual(true);
+        expect(queryMessage.info.bounce).toEqual(false);
     } else {
         expect(false).toEqual(true);
     }
@@ -174,7 +224,7 @@ get fun `test Pool InitWalletBinding sends TEP-89 query when wallet is null`() {
 
 get fun `test Pool InitWalletBinding accepts exact query budget`() {
     val masterAddr = testing.treasury("jm").address;
-    val pool = forgePool(null, 0, []);
+    val pool = forgePool(null, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -188,7 +238,7 @@ get fun `test Pool InitWalletBinding accepts exact query budget`() {
 }
 
 get fun `test Pool InitWalletBinding one nano below query budget is rejected`() {
-    val pool = forgePool(null, 0, []);
+    val pool = forgePool(null, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -205,7 +255,7 @@ get fun `test Pool InitWalletBinding one nano below query budget is rejected`() 
 }
 
 get fun `test Pool InitWalletBinding underfunded is rejected`() {
-    val pool = forgePool(null, 0, []);
+    val pool = forgePool(null, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -227,7 +277,7 @@ get fun `test Pool InitWalletBinding underfunded is rejected`() {
 // ============================================================================
 
 get fun `test Pool deposit before wallet binding is silently dropped`() {
-    val pool = forgePool(null, 0, []);
+    val pool = forgePool(null, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -252,7 +302,7 @@ get fun `test Pool deposit before wallet binding is silently dropped`() {
 // ============================================================================
 
 get fun `test Pool withdraw is rejected when jettonWallet is unset`() {
-    val pool = forgePool(null, 0, []);
+    val pool = forgePool(null, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -264,14 +314,14 @@ get fun `test Pool withdraw is rejected when jettonWallet is unset`() {
         proofC: (G1Point { raw: createEmptySlice() }).toCell(),
     };
 
-    val res = pool.sendWithdraw(
+    val res = pool.sendWithdrawWithEmptySparseProof(
         anyone.address,
         1,
         0,
         0,
         anyone.address,
         zeroProof,
-        { value: MIN_WITHDRAW_GAS },
+        { value: MIN_JETTON_WITHDRAW_GAS },
     );
     expect(res).toHaveFailedTx({
         from: anyone.address,
@@ -286,7 +336,7 @@ get fun `test Pool withdraw is rejected when jettonWallet is unset`() {
 
 get fun `test Pool withdraw rejects masterchain recipient`() {
     val jw = testing.treasury("jw").address;
-    val pool = forgePool(jw, 0, []);
+    val pool = forgePool(jw, 1);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -299,14 +349,14 @@ get fun `test Pool withdraw rejects masterchain recipient`() {
     };
 
     val masterchainRecipient = address.fromWorkchainAndHash(-1, 0x1234);
-    val res = pool.sendWithdraw(
+    val res = pool.sendWithdrawWithEmptySparseProof(
         anyone.address,
         1,
         0,
         0,
         masterchainRecipient,
         zeroProof,
-        { value: MIN_WITHDRAW_GAS },
+        { value: MIN_JETTON_WITHDRAW_GAS },
     );
     expect(res).toHaveFailedTx({
         from: anyone.address,
@@ -317,7 +367,7 @@ get fun `test Pool withdraw rejects masterchain recipient`() {
 
 get fun `test Pool withdraw rejects zero-hash recipient`() {
     val jw = testing.treasury("jw").address;
-    val pool = forgePool(jw, 0, []);
+    val pool = forgePool(jw, 1);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -330,14 +380,14 @@ get fun `test Pool withdraw rejects zero-hash recipient`() {
     };
 
     val zeroHashRecipient = address.fromWorkchainAndHash(0, 0);
-    val res = pool.sendWithdraw(
+    val res = pool.sendWithdrawWithEmptySparseProof(
         anyone.address,
         1,
         0,
         0,
         zeroHashRecipient,
         zeroProof,
-        { value: MIN_WITHDRAW_GAS },
+        { value: MIN_JETTON_WITHDRAW_GAS },
     );
     expect(res).toHaveFailedTx({
         from: anyone.address,
@@ -347,7 +397,7 @@ get fun `test Pool withdraw rejects zero-hash recipient`() {
 }
 
 get fun `test TonPool withdraw rejects masterchain recipient`() {
-    val tonPool = forgeTonPool(0, []);
+    val tonPool = forgeTonPool(0);
     expect(
         tonPool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: tonPool.address });
@@ -360,7 +410,7 @@ get fun `test TonPool withdraw rejects masterchain recipient`() {
     };
 
     val masterchainRecipient = address.fromWorkchainAndHash(-1, 0x1234);
-    val res = tonPool.sendTonWithdraw(
+    val res = tonPool.sendTonWithdrawWithEmptySparseProof(
         anyone.address,
         1,
         0,
@@ -377,7 +427,7 @@ get fun `test TonPool withdraw rejects masterchain recipient`() {
 }
 
 get fun `test TonPool withdraw rejects zero-hash recipient`() {
-    val tonPool = forgeTonPool(0, []);
+    val tonPool = forgeTonPool(0);
     expect(
         tonPool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: tonPool.address });
@@ -390,7 +440,7 @@ get fun `test TonPool withdraw rejects zero-hash recipient`() {
     };
 
     val zeroHashRecipient = address.fromWorkchainAndHash(0, 0);
-    val res = tonPool.sendTonWithdraw(
+    val res = tonPool.sendTonWithdrawWithEmptySparseProof(
         anyone.address,
         1,
         0,
@@ -412,18 +462,37 @@ get fun `test TonPool withdraw rejects zero-hash recipient`() {
 
 get fun `test Pool deposit is refunded when tree is at capacity`() {
     val jw = testing.treasury("jw").address;
-    val pool = forgePool(jw, MERKLE_TREE_CAPACITY as uint32, []);
+    val pool = forgePoolWithState(
+        jw,
+        MERKLE_TREE_CAPACITY as uint32,
+        FIXTURE_INSERT_OLD_ROOT,
+        createEmptySparseSetRoots(),
+    );
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
 
     val user = testing.treasury("user");
+    val payload = (DepositPayload {
+        queryId: 1,
+        commitment: FIXTURE_INSERT_COMMITMENT,
+        newRoot: FIXTURE_INSERT_NEW_ROOT,
+        insertProof: (ZkProof {
+            proofA: (G1Point { raw: fixtureInsertProofA() }).toCell(),
+            proofB: (G2Point { raw: fixtureInsertProofB() }).toCell(),
+            proofC: (G1Point { raw: fixtureInsertProofC() }).toCell(),
+        }).toCell(),
+        commitmentSetProof: poolEmptySparseSetProof(
+            SPARSE_SET_COMMITMENT_DOMAIN,
+            FIXTURE_INSERT_COMMITMENT,
+        ).toCell(),
+    }).toCell();
     val res = pool.sendJettonTransferNotification(
         jw,
         1,
         EDGE_DENOM,
         user.address,
-        createEmptySlice(),
+        beginCell().storeBool(true).storeRef(payload).endCell().beginParse(),
         { value: ton("0.7") },
     );
 
@@ -435,15 +504,25 @@ get fun `test Pool deposit is refunded when tree is at capacity`() {
         to: jw,
         opcode: 0x0f8a7ea5, // OP_JETTON_TRANSFER
     });
+    // The capacity guard must reject before sparse verification and the costly
+    // BLS pairing. A missing or off-by-one guard still refunds, but exceeds
+    // this deliberately generous early-rejection gas ceiling.
+    val gas = res
+        .findTransaction<JettonTransferNotification>({ from: jw, to: pool.address })!
+        .getUsedGas();
+    println("full Jetton tree rejection gas={}", gas);
+    expect(gas < 100000).toEqual(true);
 }
 
 get fun `test Pool deposit is refunded when commitment is already used`() {
     val jw = testing.treasury("jw").address;
     val existingCommitment: uint256 = 0x1337;
-    var commitments: map<uint256, uint32> = [];
-    commitments.set(existingCommitment, 0);
 
-    val pool = forgePool(jw, 1, commitments);
+    val pool = forgePoolWithSparseSets(
+        jw,
+        1,
+        sparseSetRootsContaining(SPARSE_SET_COMMITMENT_DOMAIN, existingCommitment),
+    );
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -494,7 +573,7 @@ get fun `test Pool deposit is refunded when commitment is already used`() {
 
 fun expectMalformedDepositRefunds(forwardPayload: slice) {
     val jw = testing.treasury("jw").address;
-    val pool = forgePool(jw, 0, []);
+    val pool = forgePool(jw, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -524,6 +603,39 @@ fun dummyProofCell(): cell {
         .storeRef(beginCell().endCell())
         .storeRef(beginCell().endCell())
         .endCell();
+}
+
+fun zeroProofPoint(bits: int): cell {
+    var builder = beginCell();
+    var remaining = bits;
+    while (remaining >= 256) {
+        builder = builder.storeUint(0, 256);
+        remaining -= 256;
+    }
+    if (remaining > 0) {
+        builder = builder.storeUint(0, remaining);
+    }
+    return builder.endCell();
+}
+
+fun proofCellWithFirstPoint(firstPoint: cell): cell {
+    return beginCell()
+        .storeRef(firstPoint)
+        .storeRef(zeroProofPoint(768))
+        .storeRef(zeroProofPoint(384))
+        .endCell();
+}
+
+fun depositForwardPayloadWithProof(proofCell: cell): slice {
+    val payload = beginCell()
+        .storeUint(OP_DEPOSIT_PAYLOAD, 32)
+        .storeUint(1, 64)
+        .storeUint(0x1234, 256)
+        .storeUint(0x5678, 256)
+        .storeRef(proofCell)
+        .storeRef(emptySparseSetProof(SPARSE_SET_COMMITMENT_DOMAIN, 0x1234).toCell())
+        .endCell();
+    return beginCell().storeUint(1, 1).storeRef(payload).endCell().beginParse();
 }
 
 get fun `test Pool deposit with empty forward_payload refunds safely`() {
@@ -563,6 +675,30 @@ get fun `test Pool deposit with missing proof ref refunds safely`() {
         .beginParse();
 
     expectMalformedDepositRefunds(badPayload);
+}
+
+get fun `test Pool deposit with exotic payload ref refunds safely`() {
+    expectMalformedDepositRefunds(
+        beginCell()
+            .storeUint(1, 1)
+            .storeRef(createEmptyCell().toLibraryReference())
+            .endCell()
+            .beginParse(),
+    );
+}
+
+get fun `test Pool deposit with exotic proof root refunds safely`() {
+    expectMalformedDepositRefunds(
+        depositForwardPayloadWithProof(createEmptyCell().toLibraryReference()),
+    );
+}
+
+get fun `test Pool deposit with exotic proof point refunds safely`() {
+    expectMalformedDepositRefunds(
+        depositForwardPayloadWithProof(
+            proofCellWithFirstPoint(createEmptyCell().toLibraryReference()),
+        ),
+    );
 }
 
 get fun `test Pool deposit with inline payload trailing bit refunds safely`() {
@@ -622,26 +758,30 @@ get fun `test Pool deposit with ref payload trailing bits refunds safely`() {
 // ============================================================================
 
 get fun `test TonPool deposit is refunded when tree is at capacity`() {
-    val pool = forgeTonPool(MERKLE_TREE_CAPACITY as uint32, []);
+    val pool = forgeTonPoolWithState(
+        MERKLE_TREE_CAPACITY as uint32,
+        FIXTURE_INSERT_OLD_ROOT,
+        createEmptySparseSetRoots(),
+    );
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
 
     val user = testing.treasury("user");
-    val zeroProof: ZkProof = {
-        proofA: (G1Point { raw: createEmptySlice() }).toCell(),
-        proofB: (G2Point { raw: createEmptySlice() }).toCell(),
-        proofC: (G1Point { raw: createEmptySlice() }).toCell(),
+    val realProof: ZkProof = {
+        proofA: (G1Point { raw: fixtureInsertProofA() }).toCell(),
+        proofB: (G2Point { raw: fixtureInsertProofB() }).toCell(),
+        proofC: (G1Point { raw: fixtureInsertProofC() }).toCell(),
     };
     val userBalBefore = testing.getAccountBalance(user.address);
 
-    val res = pool.sendTonDepositPayload(
+    val res = pool.sendTonDepositWithEmptySparseProof(
         user.address,
         1,
         user.address,
-        0x4242, // commitment
-        0,      // newRoot
-        zeroProof,
+        FIXTURE_INSERT_COMMITMENT,
+        FIXTURE_INSERT_NEW_ROOT,
+        realProof,
         { value: ton("10.6") },
     );
 
@@ -650,14 +790,17 @@ get fun `test TonPool deposit is refunded when tree is at capacity`() {
     // User got back ~ton("10.6") minus action fees via CARRY_ALL_REMAINING.
     val userBalAfter = testing.getAccountBalance(user.address);
     expect(userBalAfter > userBalBefore - ton("0.1")).toEqual(true);
+    val gas = res.findTransaction<TonDepositPayload>({ to: pool.address })!.getUsedGas();
+    println("full TON tree rejection gas={}", gas);
+    expect(gas < 100000).toEqual(true);
 }
 
 get fun `test TonPool deposit is refunded when commitment is already used`() {
     val existingCommitment: uint256 = 0xC0FFEE;
-    var commitments: map<uint256, uint32> = [];
-    commitments.set(existingCommitment, 0);
-
-    val pool = forgeTonPool(1, commitments);
+    val pool = forgeTonPoolWithSparseSets(
+        1,
+        sparseSetRootsContaining(SPARSE_SET_COMMITMENT_DOMAIN, existingCommitment),
+    );
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -676,6 +819,7 @@ get fun `test TonPool deposit is refunded when commitment is already used`() {
         existingCommitment,
         0,
         zeroProof,
+        occupiedSparseSetProof(SPARSE_SET_COMMITMENT_DOMAIN, existingCommitment),
         { value: ton("10.6") },
     );
 
@@ -684,7 +828,7 @@ get fun `test TonPool deposit is refunded when commitment is already used`() {
 }
 
 fun expectMalformedTonDepositProofRefunds(proofCell: cell) {
-    val pool = forgeTonPool(0, []);
+    val pool = forgeTonPool(0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -698,6 +842,9 @@ fun expectMalformedTonDepositProofRefunds(proofCell: cell) {
         .storeUint(0x1234, 256)
         .storeUint(0x5678, 256)
         .storeRef(proofCell)
+        .storeRef(
+            emptySparseSetProof(SPARSE_SET_COMMITMENT_DOMAIN, 0x1234).toCell(),
+        )
         .endCell();
 
     val res = pool.sendAny(user.address, body, { value: ton("10.6") });
@@ -736,12 +883,70 @@ get fun `test TonPool deposit with four proof refs refunds safely`() {
     );
 }
 
+get fun `test TonPool deposit with exotic proof root refunds safely`() {
+    expectMalformedTonDepositProofRefunds(createEmptyCell().toLibraryReference());
+}
+
+get fun `test TonPool deposit with exotic proof point refunds safely`() {
+    expectMalformedTonDepositProofRefunds(
+        proofCellWithFirstPoint(createEmptyCell().toLibraryReference()),
+    );
+}
+
+get fun `test TonPool deposit with trailing body data refunds safely`() {
+    val pool = forgeTonPool(0);
+    expect(
+        pool.deploy(testing.treasury("ton-trailing-deployer").address, { value: ton("1") }),
+    ).toHaveSuccessfulDeploy({ to: pool.address });
+    val user = testing.treasury("ton-trailing-user");
+    val body = beginCell()
+        .storeUint(OP_DEPOSIT_PAYLOAD, 32)
+        .storeUint(1, 64)
+        .storeAddress(user.address)
+        .storeUint(0x1234, 256)
+        .storeUint(0x5678, 256)
+        .storeRef(dummyProofCell())
+        .storeRef(emptySparseSetProof(SPARSE_SET_COMMITMENT_DOMAIN, 0x1234).toCell())
+        .storeUint(1, 1)
+        .endCell();
+
+    val result = pool.sendAny(user.address, body, { value: ton("10.6") });
+    expect(result).toHaveSuccessfulTx({ from: user.address, to: pool.address });
+    expect(pool.nextIndex()).toEqual(0);
+    expect(pool.pendingWithdrawTon()).toEqual(0);
+}
+
+get fun `test TonPool withdraw with trailing body data is rejected`() {
+    val pool = forgeTonPool(1);
+    expect(
+        pool.deploy(
+            testing.treasury("ton-withdraw-trailing-deployer").address,
+            { value: ton("1") },
+        ),
+    ).toHaveSuccessfulDeploy({ to: pool.address });
+    val user = testing.treasury("ton-withdraw-trailing-user");
+    val body = beginCell()
+        .storeUint(0x4b6f0b51, 32)
+        .storeUint(1, 64)
+        .storeUint(EMPTY_TREE_ROOT, 256)
+        .storeUint(1, 256)
+        .storeAddress(user.address)
+        .storeRef(dummyProofCell())
+        .storeRef(emptySparseSetProof(SPARSE_SET_NULLIFIER_DOMAIN, 1).toCell())
+        .storeUint(1, 1)
+        .endCell();
+
+    expect(
+        pool.sendAny(user.address, body, { value: MIN_WITHDRAW_GAS }),
+    ).toHaveFailedTx({ from: user.address, to: pool.address, exitCode: Errors.InvalidMessage });
+}
+
 // ============================================================================
 // TonPool: bounce handler is a no-op (state-preserving by design)
 // ============================================================================
 
 get fun `test TonPool onBouncedMessage does not corrupt state`() {
-    val pool = forgeTonPool(0, []);
+    val pool = forgeTonPool(0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -768,20 +973,13 @@ get fun `test TonPool onBouncedMessage does not corrupt state`() {
     expect(pool.pendingWithdrawTon()).toEqual(pendingBefore);
 }
 
-// Note: a runtime test of `MOCK_VERIFIER == false` is omitted intentionally:
-// constructing slices that exercise the verifier without underflowing the BLS
-// chunk parser requires a real fixture. The flag is instead guarded by the
-// existing `RealProof.test.tolk` suite: a tampered fixture must be rejected;
-// if `MOCK_VERIFIER` ever flips to true, those tests fail because the mocked
-// path short-circuits to `true` even for tampered inputs.
-
 // ============================================================================
 // Refund safety: failure paths refund but do not emit contract-funded logs
 // ============================================================================
 
 get fun `test Pool refund sends jettons without external failure log`() {
     val jw = testing.treasury("jw").address;
-    val pool = forgePool(jw, 0, []);
+    val pool = forgePool(jw, 0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("0.5") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -794,7 +992,7 @@ get fun `test Pool refund sends jettons without external failure log`() {
         EDGE_DENOM,
         user.address,
         createEmptySlice(),
-        { value: ton("0.30") }, // < MIN_DEPOSIT_VALUE (0.32)
+        { value: ton("0.30") }, // < MIN_DEPOSIT_VALUE (0.37)
     );
 
     expect(res).toHaveSuccessfulTx({ from: jw, to: pool.address });
@@ -803,13 +1001,11 @@ get fun `test Pool refund sends jettons without external failure log`() {
         to: jw,
         opcode: 0x0f8a7ea5,
     });
-    expect(
-        res.findExternalOutMessage<DepositRefundedEvent>({ from: pool.address }) == null,
-    ).toEqual(true);
+    expect(res.at(0).externals.size()).toEqual(0);
 }
 
 get fun `test TonPool refund sends TON without external failure log`() {
-    val pool = forgeTonPool(0, []);
+    val pool = forgeTonPool(0);
     expect(
         pool.deploy(testing.treasury("deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: pool.address });
@@ -822,7 +1018,7 @@ get fun `test TonPool refund sends TON without external failure log`() {
         proofC: (G1Point { raw: createEmptySlice() }).toCell(),
     };
 
-    val res = pool.sendTonDepositPayload(
+    val res = pool.sendTonDepositWithEmptySparseProof(
         user.address,
         1,
         user.address,
@@ -836,7 +1032,5 @@ get fun `test TonPool refund sends TON without external failure log`() {
     expect(pool.nextIndex()).toEqual(0);
     val userBalAfter = testing.getAccountBalance(user.address);
     expect(userBalAfter > userBalBefore - ton("0.1")).toEqual(true);
-    expect(
-        res.findExternalOutMessage<TonDepositRefundedEvent>({ from: pool.address }) == null,
-    ).toEqual(true);
+    expect(res.at(0).externals.size()).toEqual(0);
 }

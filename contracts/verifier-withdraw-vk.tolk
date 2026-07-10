@@ -63,6 +63,7 @@ fun vkWithdrawDelta2(): slice {
         .beginParse();
 }
 
+@pure
 fun vkWithdrawIc(i: int): slice {
     // Auto-generated from vk/withdraw_vk.json
     if (i == 0) {
@@ -104,18 +105,17 @@ fun vkWithdrawIc(i: int): slice {
             .endCell()
             .beginParse();
     }
-    if (i == 3) {
-        return beginCell()
-            .storeUint(192694099800691, 48)
-            .storeUint(210535167164193, 48)
-            .storeUint(12240310769642, 48)
-            .storeUint(174826879497381, 48)
-            .storeUint(125666507924545, 48)
-            .storeUint(270709594842584, 48)
-            .storeUint(120272799110782, 48)
-            .storeUint(242828485556548, 48)
-            .endCell()
-            .beginParse();
-    }
-    throw 0xFFFE; // unreachable for valid index
+    // Verifier callers use the fixed circuit arity, so the last IC
+    // point is the exhaustive final case.
+    return beginCell()
+        .storeUint(192694099800691, 48)
+        .storeUint(210535167164193, 48)
+        .storeUint(12240310769642, 48)
+        .storeUint(174826879497381, 48)
+        .storeUint(125666507924545, 48)
+        .storeUint(270709594842584, 48)
+        .storeUint(120272799110782, 48)
+        .storeUint(242828485556548, 48)
+        .endCell()
+        .beginParse();
 }
