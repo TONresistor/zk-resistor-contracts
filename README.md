@@ -180,17 +180,22 @@ Committed VK JSON hashes:
 
 ### Mainnet deployments
 
-The current public mainnet deployment is the older pre-ceremony test contract.
-It remains live until a separately approved production cutover.
+The production sources are frozen at commit
+[`c46b679`](https://github.com/TONresistor/zk-resistor-contracts/commit/c46b67997804d6cbaaeaa8e03813a4dd776b1422)
+and reproduce the deployed bytecode with Acton 1.0.0 and Tolk 1.4.0.
 
-- Public test Factory: [`EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu`](https://tonviewer.com/EQCncgvIPeN7jr5Di7TYKUtM_NMYM9ghSm6o3ibxovx1iGPu)
-- Frontend: [zk.resistance.dog](https://zk.resistance.dog)
+| Contract | Mainnet address or anchor | Verified source |
+|---|---|---|
+| Factory | [`EQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBjle`](https://tonviewer.com/EQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBjle) | [TON Verifier](https://verifier.ton.org/UQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBmSb) |
+| Pool | Code-hash anchor [`EQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SGSv`](https://tonviewer.com/EQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SGSv) | [TON Verifier](https://verifier.ton.org/UQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SDlq) |
+| TonPool | No production instance deployed | Pending first deployment |
 
-The finalized post-ceremony contracts are deployed separately on mainnet as a
-shadow validation environment. This deployment is not the public production
-cutover.
+TON Verifier binds sources to a runtime code hash. The Pool address above is
+only the deployed anchor for the shared Pool code; its asset and state are not
+part of source verification.
 
-- Shadow Factory: [`EQBQanbCeKIwfK2iXGGG0NFusqYKBbamyhiS_JVUR-BtkJyh`](https://tonviewer.com/EQBQanbCeKIwfK2iXGGG0NFusqYKBbamyhiS_JVUR-BtkJyh)
+- Production frontend: [zk.resistance.dog](https://zk.resistance.dog)
+- Historical frontend: [zk.resistance.dog/old/](https://zk.resistance.dog/old/)
 
 ## License
 
