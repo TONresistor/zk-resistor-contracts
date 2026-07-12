@@ -188,11 +188,14 @@ and reproduce the deployed bytecode with Acton 1.0.0 and Tolk 1.4.0.
 |---|---|---|
 | Factory | [`EQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBjle`](https://tonviewer.com/EQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBjle) | [TON Verifier](https://verifier.ton.org/UQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBmSb) |
 | Pool | Code-hash anchor [`EQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SGSv`](https://tonviewer.com/EQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SGSv) | [TON Verifier](https://verifier.ton.org/UQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SDlq) |
-| TonPool | No production instance deployed | Pending first deployment |
+| TonPool | Code-hash anchor [`EQA4dH1RqyFsROwfRF-7rwUT8676lW6DkJkW484pIYA7wiIe`](https://tonviewer.com/EQA4dH1RqyFsROwfRF-7rwUT8676lW6DkJkW484pIYA7wiIe) | [TON Verifier](https://verifier.ton.org/UQA4dH1RqyFsROwfRF-7rwUT8676lW6DkJkW484pIYA7wn_b) |
 
 TON Verifier binds sources to a runtime code hash. The Pool address above is
 only the deployed anchor for the shared Pool code; its asset and state are not
 part of source verification.
+
+The Factory currently registers two TonPool instances, for fixed denominations
+of 10 and 100 native units. They share the verified TonPool code hash above.
 
 - Production frontend: [zk.resistance.dog](https://zk.resistance.dog)
 - Historical frontend: [zk.resistance.dog/old/](https://zk.resistance.dog/old/)
