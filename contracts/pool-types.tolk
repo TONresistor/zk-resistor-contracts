@@ -3,8 +3,8 @@ import "constants"
 import "deployment-types"
 import "sparse-set"
 
-// Acton 1.0.0 wrappers import only this direct ABI module. Local aliases keep
-// generated wrappers self-contained while preserving the referenced layouts.
+// Generated wrappers import only this direct ABI module. Local aliases keep
+// them self-contained while preserving the referenced layouts.
 type PoolSparseSetUpdateProof = SparseSetUpdateProof
 
 type PoolConfirmPoolDeployment = ConfirmPoolDeployment

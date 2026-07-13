@@ -103,7 +103,7 @@ JavaScript Maps is not a one-million-note production design.
 
 ## Building from source
 
-Requires [Acton 1.0.0+](https://github.com/ton-blockchain/acton) and, for the circuits, [circom 2.2.3](https://github.com/iden3/circom) with `snarkjs 0.7.6`.
+Requires [Acton 1.1.0](https://github.com/ton-blockchain/acton) and, for the circuits, [circom 2.2.3](https://github.com/iden3/circom) with `snarkjs 0.7.6`.
 
 ### Contracts
 
@@ -182,7 +182,8 @@ Committed VK JSON hashes:
 ### Mainnet deployments
 
 The table below documents the currently deployed `2.0.0` Factory. This `2.0.1`
-branch changes only Factory bytecode and therefore requires a new address.
+branch changes only Factory bytecode, requires a new address, and builds with
+Acton 1.1.0 / Tolk 1.4.1.
 
 The production sources are frozen at commit
 [`c46b679`](https://github.com/TONresistor/zk-resistor-contracts/commit/c46b67997804d6cbaaeaa8e03813a4dd776b1422)

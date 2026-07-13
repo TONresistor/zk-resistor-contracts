@@ -2,14 +2,14 @@ import "errors"
 import "pool-types" // for MerkleState (shared with jetton pool)
 import "sparse-set"
 
-// Acton 1.0.0 wrappers import only this direct ABI module. Local aliases keep
-// the generated wrapper self-contained while preserving the exact cell layout.
+// Generated wrappers import only this direct ABI module. Local aliases keep the
+// generated wrapper self-contained while preserving the exact cell layout.
 type TonPoolZkProof = ZkProof
 
 type TonPoolSparseSetUpdateProof = SparseSetUpdateProof
 
-// Local wire-equivalent declaration keeps Acton 1.0.0's generated wrapper
-// independent from transitive imports.
+// Local wire-equivalent declaration keeps the generated wrapper independent
+// from transitive imports.
 struct (0x46504300) TonPoolConfirmPoolDeployment {
     queryId: uint64
 }

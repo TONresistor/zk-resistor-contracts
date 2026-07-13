@@ -5,7 +5,7 @@ version = "2.0.1"
 license = "MIT"
 
 [toolchain]
-acton = "1.0.0"
+acton = "1.1.0"
 
 [contracts.Pool]
 display-name = "MixerPool"
