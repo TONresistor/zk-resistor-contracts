@@ -10,8 +10,8 @@ struct (0x46504300) ConfirmPoolDeployment {
     queryId: uint64
 }
 
-// The identity fields let Factory authenticate the sender against a permanent
-// forward registry after the transient reverse/creator entries are cleaned.
+// The identity fields let Factory derive the expected Pool address from its
+// pinned code, then atomically move the request from pending to active.
 struct (0x46504301) PoolDeployConfirmed {
     queryId: uint64
     jettonMaster: address? // null identifies a native TON pool

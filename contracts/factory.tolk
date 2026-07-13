@@ -7,7 +7,7 @@ import "ton-pool-types" // TonPool storage layout
 
 contract Factory {
     author: "ZKResistor"
-    version: "2.0.0"
+    version: "2.0.1"
     description: "Unified factory: jetton pools (custom denoms) + TON pools (fixed whitelist)"
     storage: FactoryStorage
     incomingMessages: AllowedFactoryMessage
@@ -55,52 +55,36 @@ fun onBouncedMessage(in: InMessageBounced) {
     bouncedBody.loadUint(64); // queryId is not state-bearing
     bouncedBody.assertEnd();
 
-    // Pool deploy bounce: drop the forward + reverse registry entries the
-    // CreatePool path wrote, so the (jettonMaster, denomination) pair is
-    // deployable again. Identifies the failed pool by in.senderAddress.
+    // A pending Pool is keyed by its deterministic address, so a deployment
+    // bounce can release the slot and refund its creator without a reverse map.
     var storage = lazy FactoryStorage.load();
-    var registries = storage.registries.load();
     var createSenders = storage.createSenders.load();
 
-    val jettonKeyEntry = registries.poolAddressToKey.get(in.senderAddress);
-    if (jettonKeyEntry.isFound) {
-        val key = jettonKeyEntry.loadValue();
-        val creatorEntry = createSenders.poolAddressToCreator.get(in.senderAddress);
-        registries.poolRegistry.delete(key);
-        registries.poolAddressToKey.delete(in.senderAddress);
+    val jettonCreator = createSenders.poolAddressToCreator.get(in.senderAddress);
+    if (jettonCreator.isFound) {
         createSenders.poolAddressToCreator.delete(in.senderAddress);
         assert (
             storage.poolCount > 0 && storage.inFlightCreates > 0
         ) throw Errors.FactoryInvariantViolation;
         storage.poolCount -= 1;
         storage.inFlightCreates -= 1;
-        storage.registries = registries.toCell();
         storage.createSenders = createSenders.toCell();
         storage.save();
-        if (creatorEntry.isFound) {
-            refundDeployBounce(creatorEntry.loadValue());
-        }
+        refundDeployBounce(jettonCreator.loadValue());
         return;
     }
 
-    val tonKeyEntry = registries.tonPoolAddressToKey.get(in.senderAddress);
-    if (tonKeyEntry.isFound) {
-        val key = tonKeyEntry.loadValue();
-        val creatorEntry = createSenders.tonPoolAddressToCreator.get(in.senderAddress);
-        registries.tonPoolRegistry.delete(key);
-        registries.tonPoolAddressToKey.delete(in.senderAddress);
+    val tonCreator = createSenders.tonPoolAddressToCreator.get(in.senderAddress);
+    if (tonCreator.isFound) {
         createSenders.tonPoolAddressToCreator.delete(in.senderAddress);
         assert (
             storage.tonPoolCount > 0 && storage.inFlightCreates > 0
         ) throw Errors.FactoryInvariantViolation;
         storage.tonPoolCount -= 1;
         storage.inFlightCreates -= 1;
-        storage.registries = registries.toCell();
         storage.createSenders = createSenders.toCell();
         storage.save();
-        if (creatorEntry.isFound) {
-            refundDeployBounce(creatorEntry.loadValue());
-        }
+        refundDeployBounce(tonCreator.loadValue());
         return;
     }
     // Unknown bounce: no-op.
@@ -110,9 +94,9 @@ fun onBouncedMessage(in: InMessageBounced) {
 // DEPLOY CONFIRMATION
 // ============================================================================
 
-// Authentication uses the permanent forward registry, not the transient
-// reverse map. Therefore the same callback remains valid after cleanup and
-// can be retriggered without consuming another in-flight slot.
+// Authentication derives the expected sender from the immutable Pool code and
+// identity. The callback atomically moves a pending identity into the active
+// registry; an already-active callback is an idempotent no-op.
 fun handlePoolDeployConfirmed(sender: address, rawBody: slice, msg: PoolDeployConfirmed) {
     // Reject trailing bits/refs and non-canonical encodings. Repacking the
     // untouched inbound slice makes the comparison cover the complete body.
@@ -125,39 +109,54 @@ fun handlePoolDeployConfirmed(sender: address, rawBody: slice, msg: PoolDeployCo
 
     if (msg.jettonMaster != null) {
         val key = computeRegistryKey(msg.jettonMaster!, msg.denomination);
-        val registered = registries.poolRegistry.get(key);
-        assert (
-            registered.isFound && registered.loadValue() == sender
-        ) throw Errors.InvalidPoolConfirmation;
+        val expected = calcDeployedPool(
+            storage.codes.load().poolCode,
+            msg.jettonMaster!,
+            contract.getAddress(),
+            msg.denomination,
+        ).calculateAddress();
+        assert (sender == expected) throw Errors.InvalidPoolConfirmation;
 
-        val reverse = registries.poolAddressToKey.get(sender);
-        if (!reverse.isFound) {
-            // Already confirmed: forward-registry authentication above makes
-            // this an authenticated, idempotent no-op.
+        val registered = registries.poolRegistry.get(key);
+        if (registered.isFound) {
+            assert (registered.loadValue() == sender) throw Errors.FactoryInvariantViolation;
+            assert (
+                !createSenders.poolAddressToCreator.exists(sender)
+            ) throw Errors.FactoryInvariantViolation;
             return;
         }
-        assert (reverse.loadValue() == key) throw Errors.FactoryInvariantViolation;
-        assert (storage.inFlightCreates > 0) throw Errors.FactoryInvariantViolation;
 
-        registries.poolAddressToKey.delete(sender);
+        assert (
+            createSenders.poolAddressToCreator.exists(sender)
+        ) throw Errors.InvalidPoolConfirmation;
+        assert (storage.inFlightCreates > 0) throw Errors.FactoryInvariantViolation;
         createSenders.poolAddressToCreator.delete(sender);
+        registries.poolRegistry.set(key, sender);
         storage.inFlightCreates -= 1;
     } else {
         val key = computeTonRegistryKey(msg.denomination);
-        val registered = registries.tonPoolRegistry.get(key);
-        assert (
-            registered.isFound && registered.loadValue() == sender
-        ) throw Errors.InvalidPoolConfirmation;
+        val expected = calcDeployedTonPool(
+            storage.codes.load().tonPoolCode,
+            contract.getAddress(),
+            msg.denomination,
+        ).calculateAddress();
+        assert (sender == expected) throw Errors.InvalidPoolConfirmation;
 
-        val reverse = registries.tonPoolAddressToKey.get(sender);
-        if (!reverse.isFound) {
+        val registered = registries.tonPoolRegistry.get(key);
+        if (registered.isFound) {
+            assert (registered.loadValue() == sender) throw Errors.FactoryInvariantViolation;
+            assert (
+                !createSenders.tonPoolAddressToCreator.exists(sender)
+            ) throw Errors.FactoryInvariantViolation;
             return;
         }
-        assert (reverse.loadValue() == key) throw Errors.FactoryInvariantViolation;
-        assert (storage.inFlightCreates > 0) throw Errors.FactoryInvariantViolation;
 
-        registries.tonPoolAddressToKey.delete(sender);
+        assert (
+            createSenders.tonPoolAddressToCreator.exists(sender)
+        ) throw Errors.InvalidPoolConfirmation;
+        assert (storage.inFlightCreates > 0) throw Errors.FactoryInvariantViolation;
         createSenders.tonPoolAddressToCreator.delete(sender);
+        registries.tonPoolRegistry.set(key, sender);
         storage.inFlightCreates -= 1;
     }
 
@@ -180,20 +179,12 @@ fun handleCreatePool(sender: address, valueCoins: coins, msg: CreatePool) {
 
     var storage = lazy FactoryStorage.load();
     val codes = storage.codes.load();
-    var registries = storage.registries.load();
+    val registries = storage.registries.load();
     var createSenders = storage.createSenders.load();
     val totalPoolsBefore = storage.poolCount + storage.tonPoolCount;
 
     val registryKey = computeRegistryKey(msg.jettonMaster, msg.denomination);
     assert (!registries.poolRegistry.exists(registryKey)) throw Errors.PoolAlreadyExists;
-    assert (
-        storage.poolCount + storage.tonPoolCount < MAX_FACTORY_POOLS
-    ) throw Errors.FactoryCapacityReached;
-    assert (storage.inFlightCreates < MAX_IN_FLIGHT_CREATES) throw Errors.TooManyInFlightCreates;
-    assert (
-        contract.getOriginalBalance() - valueCoins >= factoryRentBudget(totalPoolsBefore)
-    ) throw Errors.InsufficientBalance;
-
     val factoryAddr = contract.getAddress();
     val poolDeployed = calcDeployedPool(
         codes.poolCode,
@@ -202,13 +193,16 @@ fun handleCreatePool(sender: address, valueCoins: coins, msg: CreatePool) {
         msg.denomination,
     );
     val poolAddress = poolDeployed.calculateAddress();
+    assert (!createSenders.poolAddressToCreator.exists(poolAddress)) throw Errors.PoolAlreadyExists;
+    assert (storage.poolCount < MAX_JETTON_POOLS) throw Errors.FactoryCapacityReached;
+    assert (storage.inFlightCreates < MAX_IN_FLIGHT_CREATES) throw Errors.TooManyInFlightCreates;
+    assert (
+        contract.getOriginalBalance() - valueCoins >= factoryRentBudget(totalPoolsBefore)
+    ) throw Errors.InsufficientBalance;
 
-    // Persist registry + reverse map BEFORE sending deploy. The reverse map
-    // lets `onBouncedMessage` roll back if the deploy fails.
-    registries.poolRegistry.set(registryKey, poolAddress);
-    registries.poolAddressToKey.set(poolAddress, registryKey);
+    // Reserve the deterministic identity before sending deploy. The active
+    // registry is written only by the authenticated Pool callback.
     createSenders.poolAddressToCreator.set(poolAddress, sender);
-    storage.registries = registries.toCell();
     storage.createSenders = createSenders.toCell();
     storage.poolCount = storage.poolCount + 1;
     storage.inFlightCreates += 1;
@@ -228,7 +222,7 @@ fun handleCreatePool(sender: address, valueCoins: coins, msg: CreatePool) {
 
     // bounce: true keeps the rollback path live. Only value from this create
     // is forwarded: prior donations and the historical rent runway remain on
-    // the Factory and can never subsidize a later creator.
+    // the Factory and cannot subsidize a later creator.
     val deployMsg = createMessage({
         bounce: true,
         dest: poolDeployed,
@@ -252,20 +246,12 @@ fun handleCreateTonPool(sender: address, valueCoins: coins, msg: CreateTonPool) 
 
     var storage = lazy FactoryStorage.load();
     val codes = storage.codes.load();
-    var registries = storage.registries.load();
+    val registries = storage.registries.load();
     var createSenders = storage.createSenders.load();
     val totalPoolsBefore = storage.poolCount + storage.tonPoolCount;
 
     val registryKey = computeTonRegistryKey(msg.denomination);
     assert (!registries.tonPoolRegistry.exists(registryKey)) throw Errors.PoolAlreadyExists;
-    assert (
-        storage.poolCount + storage.tonPoolCount < MAX_FACTORY_POOLS
-    ) throw Errors.FactoryCapacityReached;
-    assert (storage.inFlightCreates < MAX_IN_FLIGHT_CREATES) throw Errors.TooManyInFlightCreates;
-    assert (
-        contract.getOriginalBalance() - valueCoins >= factoryRentBudget(totalPoolsBefore)
-    ) throw Errors.InsufficientBalance;
-
     val factoryAddr = contract.getAddress();
     val poolDeployed = calcDeployedTonPool(
         codes.tonPoolCode,
@@ -273,11 +259,16 @@ fun handleCreateTonPool(sender: address, valueCoins: coins, msg: CreateTonPool) 
         msg.denomination,
     );
     val poolAddress = poolDeployed.calculateAddress();
+    assert (
+        !createSenders.tonPoolAddressToCreator.exists(poolAddress)
+    ) throw Errors.PoolAlreadyExists;
+    assert (storage.tonPoolCount < MAX_TON_POOLS) throw Errors.FactoryCapacityReached;
+    assert (storage.inFlightCreates < MAX_IN_FLIGHT_CREATES) throw Errors.TooManyInFlightCreates;
+    assert (
+        contract.getOriginalBalance() - valueCoins >= factoryRentBudget(totalPoolsBefore)
+    ) throw Errors.InsufficientBalance;
 
-    registries.tonPoolRegistry.set(registryKey, poolAddress);
-    registries.tonPoolAddressToKey.set(poolAddress, registryKey);
     createSenders.tonPoolAddressToCreator.set(poolAddress, sender);
-    storage.registries = registries.toCell();
     storage.createSenders = createSenders.toCell();
     storage.tonPoolCount = storage.tonPoolCount + 1;
     storage.inFlightCreates += 1;
@@ -396,12 +387,7 @@ fun calcDeployedTonPool(
 
 // Empty initial Registries cell. Exported for deploy scripts.
 fun initialRegistries(): Registries {
-    return {
-        poolRegistry: [],
-        poolAddressToKey: [],
-        tonPoolRegistry: [],
-        tonPoolAddressToKey: [],
-    };
+    return { poolRegistry: [], tonPoolRegistry: [] };
 }
 
 fun initialCreateSenders(): CreateSenders {
@@ -458,7 +444,16 @@ get fun poolAddressFor(jettonMaster: address, denomination: coins): address? {
     val registries = storage.registries.load();
     val key = computeRegistryKey(jettonMaster, denomination);
     val r = registries.poolRegistry.get(key);
-    return r.isFound ? r.loadValue() : null;
+    if (r.isFound) {
+        return r.loadValue();
+    }
+    val expected = calcDeployedPool(
+        storage.codes.load().poolCode,
+        jettonMaster,
+        contract.getAddress(),
+        denomination,
+    ).calculateAddress();
+    return storage.createSenders.load().poolAddressToCreator.exists(expected) ? expected : null;
 }
 
 // The address a pool for (jettonMaster, denomination) would have, whether
@@ -479,9 +474,13 @@ get fun expectedPoolAddress(
 
 get fun poolDeploymentPending(jettonMaster: address, denomination: coins): bool {
     val storage = lazy FactoryStorage.load();
-    val registries = storage.registries.load();
-    val registered = registries.poolRegistry.get(computeRegistryKey(jettonMaster, denomination));
-    return registered.isFound && registries.poolAddressToKey.exists(registered.loadValue());
+    val expected = calcDeployedPool(
+        storage.codes.load().poolCode,
+        jettonMaster,
+        contract.getAddress(),
+        denomination,
+    ).calculateAddress();
+    return storage.createSenders.load().poolAddressToCreator.exists(expected);
 }
 
 get fun tonPoolCount(): uint32 {
@@ -493,7 +492,15 @@ get fun tonPoolAddressFor(denomination: coins): address? {
     val storage = lazy FactoryStorage.load();
     val registries = storage.registries.load();
     val r = registries.tonPoolRegistry.get(computeTonRegistryKey(denomination));
-    return r.isFound ? r.loadValue() : null;
+    if (r.isFound) {
+        return r.loadValue();
+    }
+    val expected = calcDeployedTonPool(
+        storage.codes.load().tonPoolCode,
+        contract.getAddress(),
+        denomination,
+    ).calculateAddress();
+    return storage.createSenders.load().tonPoolAddressToCreator.exists(expected) ? expected : null;
 }
 
 get fun expectedTonPoolAddress(denomination: coins): address {
@@ -508,7 +515,10 @@ get fun expectedTonPoolAddress(denomination: coins): address {
 
 get fun tonPoolDeploymentPending(denomination: coins): bool {
     val storage = lazy FactoryStorage.load();
-    val registries = storage.registries.load();
-    val registered = registries.tonPoolRegistry.get(computeTonRegistryKey(denomination));
-    return registered.isFound && registries.tonPoolAddressToKey.exists(registered.loadValue());
+    val expected = calcDeployedTonPool(
+        storage.codes.load().tonPoolCode,
+        contract.getAddress(),
+        denomination,
+    ).calculateAddress();
+    return storage.createSenders.load().tonPoolAddressToCreator.exists(expected);
 }

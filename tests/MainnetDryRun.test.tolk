@@ -73,12 +73,7 @@ fun buildJettonForwardPayload(): slice {
 get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
     // === STEP 1: Deploy Factory (mimics deploy-factory.ts) ============
     val deployer = testing.treasury("deployer");
-    val registries: Registries = {
-        poolRegistry: [],
-        poolAddressToKey: [],
-        tonPoolRegistry: [],
-        tonPoolAddressToKey: [],
-    };
+    val registries: Registries = { poolRegistry: [], tonPoolRegistry: [] };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     val factory = Factory.fromStorage({
         codes: (FactoryCodes {
@@ -249,12 +244,7 @@ get fun `test MAINNET-DRY-RUN: full lifecycle end-to-end`() {
 
 get fun `test MAINNET-DRY-RUN: TonPool with bad denom rejected at factory`() {
     val deployer = testing.treasury("deployer");
-    val registries: Registries = {
-        poolRegistry: [],
-        poolAddressToKey: [],
-        tonPoolRegistry: [],
-        tonPoolAddressToKey: [],
-    };
+    val registries: Registries = { poolRegistry: [], tonPoolRegistry: [] };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     val factory = Factory.fromStorage({
         codes: (FactoryCodes {

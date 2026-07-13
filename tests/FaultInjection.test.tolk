@@ -169,9 +169,7 @@ fun deployFaultFactory(): Factory {
         inFlightCreates: 0,
         registries: (Registries {
             poolRegistry: [],
-            poolAddressToKey: [],
             tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
         }).toCell(),
         createSenders: (CreateSenders {
             poolAddressToCreator: [],

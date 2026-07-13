@@ -51,10 +51,9 @@ const MIN_CREATE_TON_POOL_FEE: coins = 450000000 // 0.45 TON
 // is forwarded explicitly, without sweeping prior donations.
 const FACTORY_CREATE_RETAINED_VALUE: coins = 40000000 // 0.04 TON
 
-// Retained by the factory per CreatePool to fund storage rent for the pool's
-// index entries (forward, reverse, create-sender). Caps the slow-burn
-// registry-bloat griefing surface: a spammer at 0.20 TON / pool funds their
-// own rent.
+// Retained by the Factory per accepted create to fund one active or pending
+// registry entry. The entry moves between maps on activation without growing
+// the total state, and every creator funds its own storage runway.
 const REGISTRY_RENT_PER_POOL: coins = 20000000 // 0.02 TON
 
 // Minimum TON a deposit must attach beyond the denomination. Splits as

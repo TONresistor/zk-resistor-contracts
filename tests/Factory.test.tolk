@@ -19,15 +19,11 @@ import "@wrappers/Factory.gen"
 import "@wrappers/Pool.gen"
 
 const FACTORY_TEN_YEARS_SECONDS: int = 10 * 365 * 24 * 60 * 60
-const MAX_FACTORY_STATE_CELLS: int = 16384
+// Release gate below TON's 65,536-cell basechain account-state limit.
+const MAX_FACTORY_STATE_CELLS: int = 50000
 
 fun freshFactory(): Factory {
-    val registries: Registries = {
-        poolRegistry: [],
-        poolAddressToKey: [],
-        tonPoolRegistry: [],
-        tonPoolAddressToKey: [],
-    };
+    val registries: Registries = { poolRegistry: [], tonPoolRegistry: [] };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     return Factory.fromStorage({
         codes: (FactoryCodes {
@@ -72,6 +68,26 @@ fun setFactoryBalance(factory: Factory, balance: coins) {
     var info = account;
     info.storage.balance.grams = balance;
     info.storageStat.lastPaid = now;
+    shard.account = (info as TlbAccount).toCell();
+    testing.setShardAccount(factory.address, shard);
+}
+
+fun setFactoryStorage(factory: Factory, storage: FactoryStorage) {
+    var shard = activeFactoryShardAccount(factory);
+    val account = shard.account.load();
+    if (account !is TlbAccountInfo) {
+        Assert.fail("Expected active Factory account");
+    }
+    var info = account;
+    val accountState = info.storage.state;
+    if (accountState !is TlbAccountStateActive) {
+        Assert.fail("Expected active Factory state");
+    }
+    var activeState = accountState;
+    var stateInit = activeState.stateInit;
+    stateInit.data = storage.toCell();
+    activeState.stateInit = stateInit;
+    info.storage.state = activeState;
     shard.account = (info as TlbAccount).toCell();
     testing.setShardAccount(factory.address, shard);
 }
@@ -204,6 +220,42 @@ get fun `test createPool fails on duplicate (jetton, denom)`() {
         to: factory.address,
         exitCode: Errors.PoolAlreadyExists,
     });
+}
+
+get fun `test two different Jetton Pools can remain pending concurrently`() {
+    val (factory, _, user) = setupDeployedFactory();
+    val masterA = testing.treasury("concurrent-master-a").address;
+    val masterB = testing.treasury("concurrent-master-b").address;
+    val denomination: coins = 100;
+    val poolA = factory.expectedPoolAddress(masterA, denomination);
+    val poolB = factory.expectedPoolAddress(masterB, denomination);
+
+    expect(
+        factory.sendCreatePool(
+            user.address,
+            1,
+            masterA,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    expect(
+        factory.sendCreatePool(
+            user.address,
+            2,
+            masterB,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+
+    expect(poolA == poolB).toEqual(false);
+    expect(factory.poolCount()).toEqual(2);
+    expect(factory.inFlightCreateCount()).toEqual(2);
+    expect(factory.poolDeploymentPending(masterA, denomination)).toEqual(true);
+    expect(factory.poolDeploymentPending(masterB, denomination)).toEqual(true);
+    expect(factory.pendingCreateSender(poolA)).toEqual(user.address);
+    expect(factory.pendingCreateSender(poolB)).toEqual(user.address);
 }
 
 get fun `test createPool with zero denomination is rejected`() {
@@ -403,6 +455,28 @@ get fun `test createTonPool fails on duplicate denom`() {
         to: factory.address,
         exitCode: Errors.PoolAlreadyExists,
     });
+}
+
+get fun `test createTonPool rejects a duplicate while first deployment is pending`() {
+    val (factory, _, user) = setupDeployedFactory();
+    val denomination: coins = TON_POOL_DENOM_10;
+    processSingleTonPoolCreate(factory, user.address, 1, denomination);
+    expect(factory.tonPoolDeploymentPending(denomination)).toEqual(true);
+
+    expect(
+        factory.sendCreateTonPool(
+            user.address,
+            2,
+            denomination,
+            { value: MIN_CREATE_TON_POOL_FEE },
+        ),
+    ).toHaveFailedTx({
+        from: user.address,
+        to: factory.address,
+        exitCode: Errors.PoolAlreadyExists,
+    });
+    expect(factory.tonPoolCount()).toEqual(1);
+    expect(factory.inFlightCreateCount()).toEqual(1);
 }
 
 get fun `test factory retains REGISTRY_RENT_PER_POOL per CreatePool`() {
@@ -627,7 +701,7 @@ get fun `test createTonPool rejects trailing data without registering pool`() {
 }
 
 // ============================================================================
-// BOUNCE ROLLBACK: verify onBouncedMessage cleans the phantom registry
+// BOUNCE ROLLBACK: verify onBouncedMessage cleans the pending creation
 // ============================================================================
 //
 // We can't directly inject a bounced message through the sandbox API, so we
@@ -635,28 +709,22 @@ get fun `test createTonPool rejects trailing data without registering pool`() {
 // NOT understand the ConfirmPoolDeployment body (we swap in TonPool's
 // code under the `poolCode` slot). When CreatePool runs:
 //
-//   1. Factory persists the (jettonMaster, denomination) → poolAddress entry
-//      in both forward + reverse maps, then sends the deploy with bounce: true.
+//   1. Factory persists poolAddress → creator in the pending map, then sends
+//      the deploy with bounce: true.
 //   2. The ghost pool (= TonPool code at the Pool identity address)
 //      receives ConfirmPoolDeployment and rejects the unknown opcode,
 //      throws InvalidMessage.
 //   3. The message bounces back to the factory.
-//   4. Factory.onBouncedMessage looks up `in.senderAddress` in the reverse
-//      map, finds the entry, deletes the registry + reverse map entries
-//      and decrements poolCount.
+//   4. Factory.onBouncedMessage looks up `in.senderAddress` in the pending
+//      map, deletes it and decrements poolCount.
 //
 // The post-state must therefore show an empty registry, proving the rollback
 // path is actually wired up.
 
 fun factoryWithGuaranteedBounce(): Factory {
     // TonPool does not accept the Jetton Pool deployment state, so deployment
-    // deterministically bounces before any callback can clean the reverse map.
-    val registries: Registries = {
-        poolRegistry: [],
-        poolAddressToKey: [],
-        tonPoolRegistry: [],
-        tonPoolAddressToKey: [],
-    };
+    // deterministically bounces before any callback can activate the Pool.
+    val registries: Registries = { poolRegistry: [], tonPoolRegistry: [] };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     return Factory.fromStorage({
         codes: (FactoryCodes {
@@ -682,9 +750,7 @@ fun factoryWithGuaranteedTonBounce(): Factory {
         inFlightCreates: 0,
         registries: (Registries {
             poolRegistry: [],
-            poolAddressToKey: [],
             tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
         }).toCell(),
         createSenders: (CreateSenders {
             poolAddressToCreator: [],
@@ -693,18 +759,8 @@ fun factoryWithGuaranteedTonBounce(): Factory {
     });
 }
 
-fun factoryWithJettonCreateSenderMissing(poolAddress: address): Factory {
-    val key: uint256 = 0xA11CE;
-    var poolRegistry: map<uint256, address> = [];
-    var poolAddressToKey: map<address, uint256> = [];
-    poolRegistry.set(key, poolAddress);
-    poolAddressToKey.set(poolAddress, key);
-    val registries: Registries = {
-        poolRegistry,
-        poolAddressToKey,
-        tonPoolRegistry: [],
-        tonPoolAddressToKey: [],
-    };
+fun factoryWithJettonCreateSenderMissing(_poolAddress: address): Factory {
+    val registries: Registries = { poolRegistry: [], tonPoolRegistry: [] };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     return Factory.fromStorage({
         codes: (FactoryCodes {
@@ -719,18 +775,8 @@ fun factoryWithJettonCreateSenderMissing(poolAddress: address): Factory {
     });
 }
 
-fun factoryWithTonCreateSenderMissing(poolAddress: address): Factory {
-    val key: uint256 = 0xB0B;
-    var tonPoolRegistry: map<uint256, address> = [];
-    var tonPoolAddressToKey: map<address, uint256> = [];
-    tonPoolRegistry.set(key, poolAddress);
-    tonPoolAddressToKey.set(poolAddress, key);
-    val registries: Registries = {
-        poolRegistry: [],
-        poolAddressToKey: [],
-        tonPoolRegistry,
-        tonPoolAddressToKey,
-    };
+fun factoryWithTonCreateSenderMissing(_poolAddress: address): Factory {
+    val registries: Registries = { poolRegistry: [], tonPoolRegistry: [] };
     val createSenders: CreateSenders = { poolAddressToCreator: [], tonPoolAddressToCreator: [] };
     return Factory.fromStorage({
         codes: (FactoryCodes {
@@ -819,7 +865,7 @@ get fun `test factory rolls back registry when TON pool deploy bounces`() {
     expect(factory.expectedTonPoolAddress(denom)).toEqual(tonPoolAddr);
 }
 
-get fun `test factory rollback tolerates missing jetton creator entry`() {
+get fun `test factory ignores jetton bounce without a pending creator entry`() {
     val poolAddress = testing.treasury("legacy-jetton-pool").address;
     val factory = factoryWithJettonCreateSenderMissing(poolAddress);
     expect(
@@ -838,12 +884,12 @@ get fun `test factory rollback tolerates missing jetton creator entry`() {
 
     val bounceRes = testing.processSingleTraceStep(poolAddress, bouncedMessage);
 
-    expect(factory.poolCount()).toEqual(0);
-    expect(factory.inFlightCreateCount()).toEqual(0);
+    expect(factory.poolCount()).toEqual(1);
+    expect(factory.inFlightCreateCount()).toEqual(1);
     expect(bounceRes.outMessages.size()).toEqual(0);
 }
 
-get fun `test factory rollback tolerates missing TON creator entry`() {
+get fun `test factory ignores TON bounce without a pending creator entry`() {
     val poolAddress = testing.treasury("legacy-ton-pool").address;
     val factory = factoryWithTonCreateSenderMissing(poolAddress);
     expect(
@@ -862,8 +908,8 @@ get fun `test factory rollback tolerates missing TON creator entry`() {
 
     val bounceRes = testing.processSingleTraceStep(poolAddress, bouncedMessage);
 
-    expect(factory.tonPoolCount()).toEqual(0);
-    expect(factory.inFlightCreateCount()).toEqual(0);
+    expect(factory.tonPoolCount()).toEqual(1);
+    expect(factory.inFlightCreateCount()).toEqual(1);
     expect(bounceRes.outMessages.size()).toEqual(0);
 }
 
@@ -932,9 +978,7 @@ get fun `test factory storage vNext has canonical root and code bundle layout`()
 
     val registries = (Registries {
         poolRegistry: [],
-        poolAddressToKey: [],
         tonPoolRegistry: [],
-        tonPoolAddressToKey: [],
     }).toCell();
     val createSenders = (CreateSenders {
         poolAddressToCreator: [],
@@ -964,42 +1008,6 @@ get fun `test factory storage vNext has canonical root and code bundle layout`()
     expect(manual.hash()).toEqual(data.hash());
 }
 
-fun testJettonRegistryKey(jettonMaster: address, denomination: coins): uint256 {
-    return beginCell().storeAddress(jettonMaster).storeCoins(denomination).endCell().hash();
-}
-
-fun factoryWithPendingJetton(
-    poolAddress: address,
-    creator: address,
-    jettonMaster: address,
-    denomination: coins,
-): Factory {
-    val key = testJettonRegistryKey(jettonMaster, denomination);
-    var poolRegistry: map<uint256, address> = [];
-    var poolAddressToKey: map<address, uint256> = [];
-    var poolAddressToCreator: map<address, address> = [];
-    poolRegistry.set(key, poolAddress);
-    poolAddressToKey.set(poolAddress, key);
-    poolAddressToCreator.set(poolAddress, creator);
-
-    return Factory.fromStorage({
-        codes: factoryCodesForTest(),
-        poolCount: 1,
-        tonPoolCount: 0,
-        inFlightCreates: 1,
-        registries: (Registries {
-            poolRegistry,
-            poolAddressToKey,
-            tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
-        }).toCell(),
-        createSenders: (CreateSenders {
-            poolAddressToCreator,
-            tonPoolAddressToCreator: [],
-        }).toCell(),
-    });
-}
-
 fun factoryWithCounters(
     poolCount: uint32,
     tonPoolCount: uint32,
@@ -1012,9 +1020,7 @@ fun factoryWithCounters(
         inFlightCreates,
         registries: (Registries {
             poolRegistry: [],
-            poolAddressToKey: [],
             tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
         }).toCell(),
         createSenders: (CreateSenders {
             poolAddressToCreator: [],
@@ -1026,18 +1032,10 @@ fun factoryWithCounters(
 fun factoryWithJettonPendingCounters(
     poolAddress: address,
     creator: address,
-    jettonMaster: address,
-    denomination: coins,
     poolCount: uint32,
     inFlightCreates: uint16,
-    reverseKey: uint256,
 ): Factory {
-    val key = testJettonRegistryKey(jettonMaster, denomination);
-    var poolRegistry: map<uint256, address> = [];
-    var poolAddressToKey: map<address, uint256> = [];
     var poolAddressToCreator: map<address, address> = [];
-    poolRegistry.set(key, poolAddress);
-    poolAddressToKey.set(poolAddress, reverseKey);
     poolAddressToCreator.set(poolAddress, creator);
 
     return Factory.fromStorage({
@@ -1046,10 +1044,8 @@ fun factoryWithJettonPendingCounters(
         tonPoolCount: 0,
         inFlightCreates,
         registries: (Registries {
-            poolRegistry,
-            poolAddressToKey,
+            poolRegistry: [],
             tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
         }).toCell(),
         createSenders: (CreateSenders {
             poolAddressToCreator,
@@ -1061,17 +1057,10 @@ fun factoryWithJettonPendingCounters(
 fun factoryWithTonPendingCounters(
     poolAddress: address,
     creator: address,
-    denomination: coins,
     tonPoolCount: uint32,
     inFlightCreates: uint16,
-    reverseKey: uint256,
 ): Factory {
-    val key = beginCell().storeCoins(denomination).endCell().hash();
-    var tonPoolRegistry: map<uint256, address> = [];
-    var tonPoolAddressToKey: map<address, uint256> = [];
     var tonPoolAddressToCreator: map<address, address> = [];
-    tonPoolRegistry.set(key, poolAddress);
-    tonPoolAddressToKey.set(poolAddress, reverseKey);
     tonPoolAddressToCreator.set(poolAddress, creator);
 
     return Factory.fromStorage({
@@ -1081,15 +1070,156 @@ fun factoryWithTonPendingCounters(
         inFlightCreates,
         registries: (Registries {
             poolRegistry: [],
-            poolAddressToKey: [],
-            tonPoolRegistry,
-            tonPoolAddressToKey,
+            tonPoolRegistry: [],
         }).toCell(),
         createSenders: (CreateSenders {
             poolAddressToCreator: [],
             tonPoolAddressToCreator,
         }).toCell(),
     });
+}
+
+fun injectPendingJetton(
+    factory: Factory,
+    poolAddress: address,
+    creator: address,
+    poolCount: uint32,
+    inFlightCreates: uint16,
+) {
+    var poolAddressToCreator: map<address, address> = [];
+    poolAddressToCreator.set(poolAddress, creator);
+    setFactoryStorage(
+        factory,
+        {
+            codes: factoryCodesForTest(),
+            poolCount,
+            tonPoolCount: 0,
+            inFlightCreates,
+            registries: (Registries {
+                poolRegistry: [],
+                tonPoolRegistry: [],
+            }).toCell(),
+            createSenders: (CreateSenders {
+                poolAddressToCreator,
+                tonPoolAddressToCreator: [],
+            }).toCell(),
+        },
+    );
+}
+
+fun injectPendingTon(
+    factory: Factory,
+    poolAddress: address,
+    creator: address,
+    tonPoolCount: uint32,
+    inFlightCreates: uint16,
+) {
+    var tonPoolAddressToCreator: map<address, address> = [];
+    tonPoolAddressToCreator.set(poolAddress, creator);
+    setFactoryStorage(
+        factory,
+        {
+            codes: factoryCodesForTest(),
+            poolCount: 0,
+            tonPoolCount,
+            inFlightCreates,
+            registries: (Registries {
+                poolRegistry: [],
+                tonPoolRegistry: [],
+            }).toCell(),
+            createSenders: (CreateSenders {
+                poolAddressToCreator: [],
+                tonPoolAddressToCreator,
+            }).toCell(),
+        },
+    );
+}
+
+fun injectActiveJetton(
+    factory: Factory,
+    jettonMaster: address,
+    denomination: coins,
+    registeredAddress: address,
+    pendingCreator: address?,
+) {
+    val registryKey = beginCell()
+        .storeAddress(jettonMaster)
+        .storeCoins(denomination)
+        .endCell()
+        .hash();
+    var poolRegistry: map<uint256, address> = [];
+    poolRegistry.set(registryKey, registeredAddress);
+    var poolAddressToCreator: map<address, address> = [];
+    if (pendingCreator != null) {
+        poolAddressToCreator.set(
+            factory.expectedPoolAddress(jettonMaster, denomination),
+            pendingCreator!,
+        );
+    }
+    setFactoryStorage(
+        factory,
+        {
+            codes: factoryCodesForTest(),
+            poolCount: 1,
+            tonPoolCount: 0,
+            inFlightCreates: pendingCreator == null ? 0 : 1,
+            registries: (Registries {
+                poolRegistry,
+                tonPoolRegistry: [],
+            }).toCell(),
+            createSenders: (CreateSenders {
+                poolAddressToCreator,
+                tonPoolAddressToCreator: [],
+            }).toCell(),
+        },
+    );
+}
+
+fun injectActiveTon(
+    factory: Factory,
+    denomination: coins,
+    registeredAddress: address,
+    pendingCreator: address?,
+) {
+    val registryKey = beginCell().storeCoins(denomination).endCell().hash();
+    var tonPoolRegistry: map<uint256, address> = [];
+    tonPoolRegistry.set(registryKey, registeredAddress);
+    var tonPoolAddressToCreator: map<address, address> = [];
+    if (pendingCreator != null) {
+        tonPoolAddressToCreator.set(factory.expectedTonPoolAddress(denomination), pendingCreator!);
+    }
+    setFactoryStorage(
+        factory,
+        {
+            codes: factoryCodesForTest(),
+            poolCount: 0,
+            tonPoolCount: 1,
+            inFlightCreates: pendingCreator == null ? 0 : 1,
+            registries: (Registries {
+                poolRegistry: [],
+                tonPoolRegistry,
+            }).toCell(),
+            createSenders: (CreateSenders {
+                poolAddressToCreator: [],
+                tonPoolAddressToCreator,
+            }).toCell(),
+        },
+    );
+}
+
+fun processSingleTonPoolCreate(
+    factory: Factory,
+    creator: address,
+    queryId: uint64,
+    denomination: coins,
+): SendResult {
+    val createRequest = createMessage({
+        bounce: true,
+        dest: factory.address,
+        value: MIN_CREATE_TON_POOL_FEE,
+        body: CreateTonPool { queryId, denomination },
+    });
+    return testing.processSingleTraceStep(creator, createRequest);
 }
 
 fun processFactoryDeployBounce(
@@ -1110,64 +1240,64 @@ fun processFactoryDeployBounce(
 }
 
 get fun `test authenticated confirmation cleans transient state and is idempotent`() {
-    val pool = testing.treasury("confirmed-pool");
-    val creator = testing.treasury("confirmed-creator");
+    val (factory, _, creator) = setupDeployedFactory();
     val jettonMaster = testing.treasury("confirmed-master").address;
     val denomination: coins = 100;
-    val factory = factoryWithPendingJetton(
-        pool.address,
-        creator.address,
-        jettonMaster,
-        denomination,
-    );
+    val poolAddress = factory.expectedPoolAddress(jettonMaster, denomination);
     expect(
-        factory.deploy(testing.treasury("confirmed-deployer").address, { value: ton("1") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+        factory.sendCreatePool(
+            creator.address,
+            1,
+            jettonMaster,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveSuccessfulTx({ from: creator.address, to: factory.address });
 
     expect(factory.inFlightCreateCount()).toEqual(1);
     expect(factory.poolDeploymentPending(jettonMaster, denomination)).toEqual(true);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
 
     val first = factory.sendPoolDeployConfirmed(
-        pool.address,
+        poolAddress,
         7,
         jettonMaster,
         denomination,
         { value: ton("0.05") },
     );
-    expect(first).toHaveSuccessfulTx({ from: pool.address, to: factory.address });
+    expect(first).toHaveSuccessfulTx({ from: poolAddress, to: factory.address });
     expect(factory.poolCount()).toEqual(1);
     expect(factory.inFlightCreateCount()).toEqual(0);
     expect(factory.poolDeploymentPending(jettonMaster, denomination)).toEqual(false);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(null);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(null);
 
-    // The permanent forward registry authenticates a retrigger after cleanup.
+    // The active registry authenticates a retrigger after cleanup.
     val second = factory.sendPoolDeployConfirmed(
-        pool.address,
+        poolAddress,
         8,
         jettonMaster,
         denomination,
         { value: ton("0.02") },
     );
-    expect(second).toHaveSuccessfulTx({ from: pool.address, to: factory.address });
+    expect(second).toHaveSuccessfulTx({ from: poolAddress, to: factory.address });
     expect(factory.inFlightCreateCount()).toEqual(0);
-    expect(factory.poolAddressFor(jettonMaster, denomination)).toEqual(pool.address);
+    expect(factory.poolAddressFor(jettonMaster, denomination)).toEqual(poolAddress);
 }
 
 get fun `test unrelated bounce from pending pool cannot roll back registry`() {
-    val pool = testing.treasury("wrong-bounce-pool");
-    val creator = testing.treasury("wrong-bounce-creator");
+    val (factory, _, creator) = setupDeployedFactory();
     val jettonMaster = testing.treasury("wrong-bounce-master").address;
     val denomination: coins = 100;
-    val factory = factoryWithPendingJetton(
-        pool.address,
-        creator.address,
-        jettonMaster,
-        denomination,
-    );
+    val poolAddress = factory.expectedPoolAddress(jettonMaster, denomination);
     expect(
-        factory.deploy(testing.treasury("wrong-bounce-deployer").address, { value: ton("1") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+        factory.sendCreatePool(
+            creator.address,
+            1,
+            jettonMaster,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveSuccessfulTx({ from: creator.address, to: factory.address });
 
     val unrelatedBounce = createMessage({
         bounce: false,
@@ -1175,7 +1305,7 @@ get fun `test unrelated bounce from pending pool cannot roll back registry`() {
         value: ton("0.01"),
         body: beginCell().storeUint(0xFFFFFFFF, 32).storeUint(0xDEADBEEF, 32).endCell(),
     }).bounced();
-    val result = testing.processSingleTraceStep(pool.address, unrelatedBounce);
+    val result = testing.processSingleTraceStep(poolAddress, unrelatedBounce);
     val description = result.tx.load().description.load();
     if (description is TlbTransOrd) {
         if (description.computePh is TlbTrComputeVm) {
@@ -1189,25 +1319,25 @@ get fun `test unrelated bounce from pending pool cannot roll back registry`() {
 
     expect(factory.poolCount()).toEqual(1);
     expect(factory.inFlightCreateCount()).toEqual(1);
-    expect(factory.poolAddressFor(jettonMaster, denomination)).toEqual(pool.address);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
+    expect(factory.poolAddressFor(jettonMaster, denomination)).toEqual(poolAddress);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
 }
 
 get fun `test spoofed confirmation cannot clean or decrement pending create`() {
-    val pool = testing.treasury("spoof-target-pool");
-    val creator = testing.treasury("spoof-creator");
+    val (factory, _, creator) = setupDeployedFactory();
     val attacker = testing.treasury("spoof-attacker");
     val jettonMaster = testing.treasury("spoof-master").address;
     val denomination: coins = 100;
-    val factory = factoryWithPendingJetton(
-        pool.address,
-        creator.address,
-        jettonMaster,
-        denomination,
-    );
+    val poolAddress = factory.expectedPoolAddress(jettonMaster, denomination);
     expect(
-        factory.deploy(testing.treasury("spoof-deployer").address, { value: ton("1") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+        factory.sendCreatePool(
+            creator.address,
+            1,
+            jettonMaster,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveSuccessfulTx({ from: creator.address, to: factory.address });
 
     val spoof = factory.sendPoolDeployConfirmed(
         attacker.address,
@@ -1223,7 +1353,7 @@ get fun `test spoofed confirmation cannot clean or decrement pending create`() {
     });
     expect(factory.inFlightCreateCount()).toEqual(1);
     expect(factory.poolDeploymentPending(jettonMaster, denomination)).toEqual(true);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
 }
 
 get fun `test confirmation for absent registry key cannot mutate factory`() {
@@ -1252,19 +1382,19 @@ get fun `test confirmation for absent registry key cannot mutate factory`() {
 }
 
 get fun `test confirmation rejects trailing data without cleaning pending state`() {
-    val pool = testing.treasury("trailing-target-pool");
-    val creator = testing.treasury("trailing-creator");
+    val (factory, _, creator) = setupDeployedFactory();
     val jettonMaster = testing.treasury("trailing-master").address;
     val denomination: coins = 100;
-    val factory = factoryWithPendingJetton(
-        pool.address,
-        creator.address,
-        jettonMaster,
-        denomination,
-    );
+    val poolAddress = factory.expectedPoolAddress(jettonMaster, denomination);
     expect(
-        factory.deploy(testing.treasury("trailing-deployer").address, { value: ton("1") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+        factory.sendCreatePool(
+            creator.address,
+            1,
+            jettonMaster,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveSuccessfulTx({ from: creator.address, to: factory.address });
 
     val canonical = (PoolDeployConfirmed {
         queryId: 1,
@@ -1272,81 +1402,45 @@ get fun `test confirmation rejects trailing data without cleaning pending state`
         denomination,
     }).toCell();
     val withTrailingBit = beginCell().storeSlice(canonical.beginParse()).storeBool(true).endCell();
-    val result = factory.sendAny(pool.address, withTrailingBit, { value: ton("0.05") });
+    val result = factory.sendAny(poolAddress, withTrailingBit, { value: ton("0.05") });
     expect(result).toHaveFailedTx({
-        from: pool.address,
+        from: poolAddress,
         to: factory.address,
         exitCode: Errors.InvalidPoolConfirmation,
     });
     expect(factory.inFlightCreateCount()).toEqual(1);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
-}
-
-fun factoryWithPendingTon(
-    poolAddress: address,
-    creator: address,
-    denomination: coins,
-): Factory {
-    val key = beginCell().storeCoins(denomination).endCell().hash();
-    var tonPoolRegistry: map<uint256, address> = [];
-    var tonPoolAddressToKey: map<address, uint256> = [];
-    var tonPoolAddressToCreator: map<address, address> = [];
-    tonPoolRegistry.set(key, poolAddress);
-    tonPoolAddressToKey.set(poolAddress, key);
-    tonPoolAddressToCreator.set(poolAddress, creator);
-
-    return Factory.fromStorage({
-        codes: factoryCodesForTest(),
-        poolCount: 0,
-        tonPoolCount: 1,
-        inFlightCreates: 1,
-        registries: (Registries {
-            poolRegistry: [],
-            poolAddressToKey: [],
-            tonPoolRegistry,
-            tonPoolAddressToKey,
-        }).toCell(),
-        createSenders: (CreateSenders {
-            poolAddressToCreator: [],
-            tonPoolAddressToCreator,
-        }).toCell(),
-    });
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
 }
 
 get fun `test authenticated TON pool confirmation cleans transient state`() {
-    val pool = testing.treasury("confirmed-ton-pool");
-    val creator = testing.treasury("confirmed-ton-creator");
+    val (factory, _, creator) = setupDeployedFactory();
     val denomination: coins = TON_POOL_DENOM_100;
-    val factory = factoryWithPendingTon(pool.address, creator.address, denomination);
-    expect(
-        factory.deploy(testing.treasury("confirmed-ton-deployer").address, { value: ton("1") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+    val poolAddress = factory.expectedTonPoolAddress(denomination);
+    processSingleTonPoolCreate(factory, creator.address, 1, denomination);
 
     expect(factory.tonPoolDeploymentPending(denomination)).toEqual(true);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
     expect(
         factory.sendPoolDeployConfirmed(
-            pool.address,
+            poolAddress,
             1,
             null,
             denomination,
             { value: ton("0.05") },
         ),
-    ).toHaveSuccessfulTx({ from: pool.address, to: factory.address });
+    ).toHaveSuccessfulTx({ from: poolAddress, to: factory.address });
     expect(factory.tonPoolCount()).toEqual(1);
     expect(factory.inFlightCreateCount()).toEqual(0);
     expect(factory.tonPoolDeploymentPending(denomination)).toEqual(false);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(null);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(null);
 }
 
 get fun `test TON pool confirmation is authenticated and idempotent`() {
-    val pool = testing.treasury("idempotent-ton-pool");
-    val creator = testing.treasury("idempotent-ton-creator");
+    val (factory, _, creator) = setupDeployedFactory();
     val attacker = testing.treasury("idempotent-ton-attacker");
     val denomination: coins = TON_POOL_DENOM_100;
-    val factory = factoryWithPendingTon(pool.address, creator.address, denomination);
-    expect(
-        factory.deploy(testing.treasury("idempotent-ton-deployer").address, { value: ton("1") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+    val poolAddress = factory.expectedTonPoolAddress(denomination);
+    processSingleTonPoolCreate(factory, creator.address, 1, denomination);
 
     expect(
         factory.sendPoolDeployConfirmed(
@@ -1365,36 +1459,33 @@ get fun `test TON pool confirmation is authenticated and idempotent`() {
 
     expect(
         factory.sendPoolDeployConfirmed(
-            pool.address,
+            poolAddress,
             2,
             null,
             denomination,
             { value: ton("0.05") },
         ),
-    ).toHaveSuccessfulTx({ from: pool.address, to: factory.address });
+    ).toHaveSuccessfulTx({ from: poolAddress, to: factory.address });
     expect(factory.inFlightCreateCount()).toEqual(0);
 
     expect(
         factory.sendPoolDeployConfirmed(
-            pool.address,
+            poolAddress,
             3,
             null,
             denomination,
             { value: ton("0.02") },
         ),
-    ).toHaveSuccessfulTx({ from: pool.address, to: factory.address });
+    ).toHaveSuccessfulTx({ from: poolAddress, to: factory.address });
     expect(factory.inFlightCreateCount()).toEqual(0);
-    expect(factory.tonPoolAddressFor(denomination)).toEqual(pool.address);
+    expect(factory.tonPoolAddressFor(denomination)).toEqual(poolAddress);
 }
 
 get fun `test TON confirmation rejects non-canonical coins encoding`() {
-    val pool = testing.treasury("noncanonical-ton-pool");
-    val creator = testing.treasury("noncanonical-ton-creator");
+    val (factory, _, creator) = setupDeployedFactory();
     val denomination: coins = TON_POOL_DENOM_100;
-    val factory = factoryWithPendingTon(pool.address, creator.address, denomination);
-    expect(
-        factory.deploy(testing.treasury("noncanonical-ton-deployer").address, { value: ton("1") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+    val poolAddress = factory.expectedTonPoolAddress(denomination);
+    processSingleTonPoolCreate(factory, creator.address, 1, denomination);
 
     // TON_POOL_DENOM_100 needs five bytes canonically. Six bytes with a leading
     // zero decode to the same value but must fail the full-body hash check.
@@ -1405,165 +1496,236 @@ get fun `test TON confirmation rejects non-canonical coins encoding`() {
         .storeUint(6, 4)
         .storeUint(denomination, 48)
         .endCell();
-    val result = factory.sendAny(pool.address, nonCanonical, { value: ton("0.05") });
+    val result = factory.sendAny(poolAddress, nonCanonical, { value: ton("0.05") });
     expect(result).toHaveFailedTx({
-        from: pool.address,
+        from: poolAddress,
         to: factory.address,
         exitCode: Errors.InvalidPoolConfirmation,
     });
     expect(factory.inFlightCreateCount()).toEqual(1);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
 }
 
-get fun `test jetton confirmation rejects corrupt reverse registry key`() {
-    val pool = testing.treasury("corrupt-reverse-jetton-pool");
-    val creator = testing.treasury("corrupt-reverse-jetton-creator");
-    val master = testing.treasury("corrupt-reverse-jetton-master").address;
-    val factory = factoryWithJettonPendingCounters(
-        pool.address,
-        creator.address,
-        master,
-        100,
-        1,
-        1,
-        0xBAD,
-    );
-    expect(
-        factory.deploy(
-            testing.treasury("corrupt-reverse-jetton-deployer").address,
-            { value: ton("1") },
-        ),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+get fun `test deterministic Jetton address cannot confirm without pending entry`() {
+    val (factory, _, _) = setupDeployedFactory();
+    val master = testing.treasury("absent-deterministic-jetton-master").address;
+    val poolAddress = factory.expectedPoolAddress(master, 100);
 
     expect(
-        factory.sendPoolDeployConfirmed(pool.address, 1, master, 100, { value: ton("0.05") }),
+        factory.sendPoolDeployConfirmed(poolAddress, 1, master, 100, { value: ton("0.05") }),
     ).toHaveFailedTx({
-        from: pool.address,
+        from: poolAddress,
         to: factory.address,
-        exitCode: Errors.FactoryInvariantViolation,
+        exitCode: Errors.InvalidPoolConfirmation,
     });
-    expect(factory.inFlightCreateCount()).toEqual(1);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
+    expect(factory.totalPoolCount()).toEqual(0);
+    expect(factory.inFlightCreateCount()).toEqual(0);
 }
 
-get fun `test TON confirmation rejects corrupt reverse registry key`() {
-    val pool = testing.treasury("corrupt-reverse-ton-pool");
-    val creator = testing.treasury("corrupt-reverse-ton-creator");
-    val factory = factoryWithTonPendingCounters(
-        pool.address,
-        creator.address,
-        TON_POOL_DENOM_100,
-        1,
-        1,
-        0xBAD,
-    );
-    expect(
-        factory.deploy(
-            testing.treasury("corrupt-reverse-ton-deployer").address,
-            { value: ton("1") },
-        ),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+get fun `test deterministic TON address cannot confirm without pending entry`() {
+    val (factory, _, _) = setupDeployedFactory();
+    val poolAddress = factory.expectedTonPoolAddress(TON_POOL_DENOM_100);
 
     expect(
         factory.sendPoolDeployConfirmed(
-            pool.address,
+            poolAddress,
             1,
             null,
             TON_POOL_DENOM_100,
             { value: ton("0.05") },
         ),
     ).toHaveFailedTx({
-        from: pool.address,
+        from: poolAddress,
+        to: factory.address,
+        exitCode: Errors.InvalidPoolConfirmation,
+    });
+    expect(factory.totalPoolCount()).toEqual(0);
+    expect(factory.inFlightCreateCount()).toEqual(0);
+}
+
+get fun `test Jetton confirmation requires the deterministic sender even if sender is pending`() {
+    val factory = freshFactory();
+    val deployer = testing.treasury("wrong-pending-jetton-deployer");
+    val creator = testing.treasury("wrong-pending-jetton-creator");
+    val wrongSender = testing.treasury("wrong-pending-jetton-sender").address;
+    val master = testing.treasury("wrong-pending-jetton-master").address;
+    expect(factory.deploy(deployer.address, { value: ton("1") })).toHaveSuccessfulDeploy({
+        to: factory.address,
+    });
+    injectPendingJetton(factory, wrongSender, creator.address, 1, 1);
+
+    expect(
+        factory.sendPoolDeployConfirmed(wrongSender, 1, master, 100, { value: ton("0.05") }),
+    ).toHaveFailedTx({
+        from: wrongSender,
+        to: factory.address,
+        exitCode: Errors.InvalidPoolConfirmation,
+    });
+    expect(factory.inFlightCreateCount()).toEqual(1);
+    expect(factory.pendingCreateSender(wrongSender)).toEqual(creator.address);
+}
+
+get fun `test TON confirmation requires the deterministic sender even if sender is pending`() {
+    val factory = freshFactory();
+    val deployer = testing.treasury("wrong-pending-ton-deployer");
+    val creator = testing.treasury("wrong-pending-ton-creator");
+    val wrongSender = testing.treasury("wrong-pending-ton-sender").address;
+    expect(factory.deploy(deployer.address, { value: ton("1") })).toHaveSuccessfulDeploy({
+        to: factory.address,
+    });
+    injectPendingTon(factory, wrongSender, creator.address, 1, 1);
+
+    expect(
+        factory.sendPoolDeployConfirmed(
+            wrongSender,
+            1,
+            null,
+            TON_POOL_DENOM_100,
+            { value: ton("0.05") },
+        ),
+    ).toHaveFailedTx({
+        from: wrongSender,
+        to: factory.address,
+        exitCode: Errors.InvalidPoolConfirmation,
+    });
+    expect(factory.inFlightCreateCount()).toEqual(1);
+    expect(factory.pendingCreateSender(wrongSender)).toEqual(creator.address);
+}
+
+get fun `test active Jetton registry rejects a mismatched deterministic address`() {
+    val (factory, _, _) = setupDeployedFactory();
+    val master = testing.treasury("mismatched-active-jetton-master").address;
+    val expectedAddress = factory.expectedPoolAddress(master, 100);
+    val wrongAddress = testing.treasury("mismatched-active-jetton-address").address;
+    injectActiveJetton(factory, master, 100, wrongAddress, null);
+
+    expect(
+        factory.sendPoolDeployConfirmed(
+            expectedAddress,
+            1,
+            master,
+            100,
+            { value: ton("0.05") },
+        ),
+    ).toHaveFailedTx({
+        from: expectedAddress,
         to: factory.address,
         exitCode: Errors.FactoryInvariantViolation,
     });
-    expect(factory.inFlightCreateCount()).toEqual(1);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
 }
 
-get fun `test jetton confirmation rejects zero in-flight counter with reverse entry`() {
-    val pool = testing.treasury("zero-inflight-confirm-jetton-pool");
-    val creator = testing.treasury("zero-inflight-confirm-jetton-creator");
-    val master = testing.treasury("zero-inflight-confirm-jetton-master").address;
-    val key = testJettonRegistryKey(master, 100);
-    val factory = factoryWithJettonPendingCounters(
-        pool.address,
-        creator.address,
-        master,
-        100,
-        1,
-        0,
-        key,
-    );
-    expect(
-        factory.deploy(
-            testing.treasury("zero-inflight-confirm-jetton-deployer").address,
-            { value: ton("1") },
-        ),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+get fun `test active TonPool registry rejects a mismatched deterministic address`() {
+    val (factory, _, _) = setupDeployedFactory();
+    val expectedAddress = factory.expectedTonPoolAddress(TON_POOL_DENOM_100);
+    val wrongAddress = testing.treasury("mismatched-active-ton-address").address;
+    injectActiveTon(factory, TON_POOL_DENOM_100, wrongAddress, null);
 
     expect(
-        factory.sendPoolDeployConfirmed(pool.address, 1, master, 100, { value: ton("0.05") }),
+        factory.sendPoolDeployConfirmed(
+            expectedAddress,
+            1,
+            null,
+            TON_POOL_DENOM_100,
+            { value: ton("0.05") },
+        ),
     ).toHaveFailedTx({
-        from: pool.address,
+        from: expectedAddress,
+        to: factory.address,
+        exitCode: Errors.FactoryInvariantViolation,
+    });
+}
+
+get fun `test active Jetton registry rejects overlapping pending state`() {
+    val (factory, _, creator) = setupDeployedFactory();
+    val master = testing.treasury("overlap-active-jetton-master").address;
+    val poolAddress = factory.expectedPoolAddress(master, 100);
+    injectActiveJetton(factory, master, 100, poolAddress, creator.address);
+
+    expect(
+        factory.sendPoolDeployConfirmed(poolAddress, 1, master, 100, { value: ton("0.05") }),
+    ).toHaveFailedTx({
+        from: poolAddress,
+        to: factory.address,
+        exitCode: Errors.FactoryInvariantViolation,
+    });
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
+}
+
+get fun `test active TonPool registry rejects overlapping pending state`() {
+    val (factory, _, creator) = setupDeployedFactory();
+    val poolAddress = factory.expectedTonPoolAddress(TON_POOL_DENOM_100);
+    injectActiveTon(factory, TON_POOL_DENOM_100, poolAddress, creator.address);
+
+    expect(
+        factory.sendPoolDeployConfirmed(
+            poolAddress,
+            1,
+            null,
+            TON_POOL_DENOM_100,
+            { value: ton("0.05") },
+        ),
+    ).toHaveFailedTx({
+        from: poolAddress,
+        to: factory.address,
+        exitCode: Errors.FactoryInvariantViolation,
+    });
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
+}
+
+get fun `test jetton confirmation rejects zero in-flight counter with pending entry`() {
+    val creator = testing.treasury("zero-inflight-confirm-jetton-creator");
+    val master = testing.treasury("zero-inflight-confirm-jetton-master").address;
+    val factory = freshFactory();
+    val deployer = testing.treasury("zero-inflight-confirm-jetton-deployer");
+    expect(factory.deploy(deployer.address, { value: ton("1") })).toHaveSuccessfulDeploy({
+        to: factory.address,
+    });
+    val poolAddress = factory.expectedPoolAddress(master, 100);
+    injectPendingJetton(factory, poolAddress, creator.address, 1, 0);
+
+    expect(
+        factory.sendPoolDeployConfirmed(poolAddress, 1, master, 100, { value: ton("0.05") }),
+    ).toHaveFailedTx({
+        from: poolAddress,
         to: factory.address,
         exitCode: Errors.FactoryInvariantViolation,
     });
     expect(factory.inFlightCreateCount()).toEqual(0);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
 }
 
-get fun `test TON confirmation rejects zero in-flight counter with reverse entry`() {
-    val pool = testing.treasury("zero-inflight-confirm-ton-pool");
+get fun `test TON confirmation rejects zero in-flight counter with pending entry`() {
     val creator = testing.treasury("zero-inflight-confirm-ton-creator");
     val denomination: coins = TON_POOL_DENOM_100;
-    val key = beginCell().storeCoins(denomination).endCell().hash();
-    val factory = factoryWithTonPendingCounters(
-        pool.address,
-        creator.address,
-        denomination,
-        1,
-        0,
-        key,
-    );
-    expect(
-        factory.deploy(
-            testing.treasury("zero-inflight-confirm-ton-deployer").address,
-            { value: ton("1") },
-        ),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
+    val factory = freshFactory();
+    val deployer = testing.treasury("zero-inflight-confirm-ton-deployer");
+    expect(factory.deploy(deployer.address, { value: ton("1") })).toHaveSuccessfulDeploy({
+        to: factory.address,
+    });
+    val poolAddress = factory.expectedTonPoolAddress(denomination);
+    injectPendingTon(factory, poolAddress, creator.address, 1, 0);
 
     expect(
         factory.sendPoolDeployConfirmed(
-            pool.address,
+            poolAddress,
             1,
             null,
             denomination,
             { value: ton("0.05") },
         ),
     ).toHaveFailedTx({
-        from: pool.address,
+        from: poolAddress,
         to: factory.address,
         exitCode: Errors.FactoryInvariantViolation,
     });
     expect(factory.inFlightCreateCount()).toEqual(0);
-    expect(factory.pendingCreateSender(pool.address)).toEqual(creator.address);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(creator.address);
 }
 
 get fun `test jetton deploy bounce rejects zero pool counter`() {
     val pool = testing.treasury("zero-count-bounce-jetton-pool");
     val creator = testing.treasury("zero-count-bounce-jetton-creator");
-    val master = testing.treasury("zero-count-bounce-jetton-master").address;
-    val key = testJettonRegistryKey(master, 100);
-    val factory = factoryWithJettonPendingCounters(
-        pool.address,
-        creator.address,
-        master,
-        100,
-        0,
-        1,
-        key,
-    );
+    val factory = factoryWithJettonPendingCounters(pool.address, creator.address, 0, 1);
     expect(
         factory.deploy(
             testing.treasury("zero-count-bounce-jetton-deployer").address,
@@ -1581,17 +1743,7 @@ get fun `test jetton deploy bounce rejects zero pool counter`() {
 get fun `test jetton deploy bounce rejects zero in-flight counter`() {
     val pool = testing.treasury("zero-inflight-bounce-jetton-pool");
     val creator = testing.treasury("zero-inflight-bounce-jetton-creator");
-    val master = testing.treasury("zero-inflight-bounce-jetton-master").address;
-    val key = testJettonRegistryKey(master, 100);
-    val factory = factoryWithJettonPendingCounters(
-        pool.address,
-        creator.address,
-        master,
-        100,
-        1,
-        0,
-        key,
-    );
+    val factory = factoryWithJettonPendingCounters(pool.address, creator.address, 1, 0);
     expect(
         factory.deploy(
             testing.treasury("zero-inflight-bounce-jetton-deployer").address,
@@ -1609,16 +1761,7 @@ get fun `test jetton deploy bounce rejects zero in-flight counter`() {
 get fun `test TON deploy bounce rejects zero pool counter`() {
     val pool = testing.treasury("zero-count-bounce-ton-pool");
     val creator = testing.treasury("zero-count-bounce-ton-creator");
-    val denomination: coins = TON_POOL_DENOM_100;
-    val key = beginCell().storeCoins(denomination).endCell().hash();
-    val factory = factoryWithTonPendingCounters(
-        pool.address,
-        creator.address,
-        denomination,
-        0,
-        1,
-        key,
-    );
+    val factory = factoryWithTonPendingCounters(pool.address, creator.address, 0, 1);
     expect(
         factory.deploy(
             testing.treasury("zero-count-bounce-ton-deployer").address,
@@ -1636,16 +1779,7 @@ get fun `test TON deploy bounce rejects zero pool counter`() {
 get fun `test TON deploy bounce rejects zero in-flight counter`() {
     val pool = testing.treasury("zero-inflight-bounce-ton-pool");
     val creator = testing.treasury("zero-inflight-bounce-ton-creator");
-    val denomination: coins = TON_POOL_DENOM_100;
-    val key = beginCell().storeCoins(denomination).endCell().hash();
-    val factory = factoryWithTonPendingCounters(
-        pool.address,
-        creator.address,
-        denomination,
-        1,
-        0,
-        key,
-    );
+    val factory = factoryWithTonPendingCounters(pool.address, creator.address, 1, 0);
     expect(
         factory.deploy(
             testing.treasury("zero-inflight-bounce-ton-deployer").address,
@@ -1663,17 +1797,7 @@ get fun `test TON deploy bounce rejects zero in-flight counter`() {
 get fun `test deploy bounce refund to uninitialized creator is non-bounceable`() {
     val pool = testing.treasury("uninit-refund-pool");
     val creator = address.fromWorkchainAndHash(0, 0xDEAD001);
-    val master = testing.treasury("uninit-refund-master").address;
-    val key = testJettonRegistryKey(master, 100);
-    val factory = factoryWithJettonPendingCounters(
-        pool.address,
-        creator,
-        master,
-        100,
-        1,
-        1,
-        key,
-    );
+    val factory = factoryWithJettonPendingCounters(pool.address, creator, 1, 1);
     expect(
         factory.deploy(testing.treasury("uninit-refund-deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: factory.address });
@@ -1712,27 +1836,29 @@ get fun `test combined factory pool cap rejects another create`() {
     expect(factory.totalPoolCount()).toEqual(MAX_FACTORY_POOLS);
 }
 
-get fun `test in-flight cap rejects another create`() {
-    val factory = factoryWithCounters(1, 0, MAX_IN_FLIGHT_CREATES as uint16);
-    val deployer = testing.treasury("in-flight-cap-deployer");
-    val user = testing.treasury("in-flight-cap-user");
+get fun `test legacy 128 pending count does not block another create`() {
+    val legacyPendingLimit: uint16 = 128;
+    val factory = factoryWithCounters(128, 0, legacyPendingLimit);
+    val deployer = testing.treasury("legacy-in-flight-deployer");
+    val user = testing.treasury("legacy-in-flight-user");
     expect(factory.deploy(deployer.address, { value: ton("1") })).toHaveSuccessfulDeploy({
         to: factory.address,
     });
+    setFactoryBalance(factory, factoryRentBudgetForTest(128));
 
     val result = factory.sendCreatePool(
         user.address,
         1,
-        testing.treasury("in-flight-cap-master").address,
+        testing.treasury("legacy-in-flight-master").address,
         100,
-        { value: ton("1") },
+        { value: MIN_CREATE_JETTON_POOL_FEE },
     );
-    expect(result).toHaveFailedTx({
+    expect(result).toHaveSuccessfulTx({
         from: user.address,
         to: factory.address,
-        exitCode: Errors.TooManyInFlightCreates,
     });
-    expect(factory.inFlightCreateCount()).toEqual(MAX_IN_FLIGHT_CREATES);
+    expect(factory.poolCount()).toEqual(129);
+    expect(factory.inFlightCreateCount()).toEqual(129);
 }
 
 get fun `test totalPoolCount adds mixed jetton and TON counters`() {
@@ -1741,6 +1867,8 @@ get fun `test totalPoolCount adds mixed jetton and TON counters`() {
         factory.deploy(testing.treasury("mixed-total-deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: factory.address });
     expect(factory.totalPoolCount()).toEqual(5);
+    expect(factory.maxFactoryPools()).toEqual(MAX_FACTORY_POOLS);
+    expect(factory.maxInFlightCreates()).toEqual(MAX_FACTORY_POOLS);
 }
 
 get fun `test mixed counters cannot hide old jetton registry rent from a new creator`() {
@@ -1845,18 +1973,18 @@ get fun `test mixed TON create reserves all historical registry rent`() {
     expect(factory.inFlightCreateCount()).toEqual(0);
 }
 
-get fun `test mixed counters at combined cap reject jetton create`() {
-    val factory = factoryWithCounters(1, (MAX_FACTORY_POOLS - 1) as uint32, 0);
-    val user = testing.treasury("mixed-cap-jetton-user");
+get fun `test Jetton slot cap rejects the 24573rd Jetton Pool`() {
+    val factory = factoryWithCounters(MAX_JETTON_POOLS as uint32, 0, 0);
+    val user = testing.treasury("jetton-slot-cap-user");
     expect(
-        factory.deploy(testing.treasury("mixed-cap-jetton-deployer").address, { value: ton("1") }),
+        factory.deploy(testing.treasury("jetton-slot-cap-deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: factory.address });
-    setFactoryBalance(factory, factoryRentBudgetForTest(MAX_FACTORY_POOLS));
+    setFactoryBalance(factory, factoryRentBudgetForTest(MAX_JETTON_POOLS));
 
     val result = factory.sendCreatePool(
         user.address,
         1,
-        testing.treasury("mixed-cap-jetton-master").address,
+        testing.treasury("jetton-slot-cap-master").address,
         100,
         { value: MIN_CREATE_JETTON_POOL_FEE },
     );
@@ -1865,16 +1993,16 @@ get fun `test mixed counters at combined cap reject jetton create`() {
         to: factory.address,
         exitCode: Errors.FactoryCapacityReached,
     });
-    expect(factory.totalPoolCount()).toEqual(MAX_FACTORY_POOLS);
+    expect(factory.poolCount()).toEqual(MAX_JETTON_POOLS);
 }
 
-get fun `test mixed counters at combined cap reject TON create`() {
-    val factory = factoryWithCounters((MAX_FACTORY_POOLS - 1) as uint32, 1, 0);
-    val user = testing.treasury("mixed-cap-ton-user");
+get fun `test GRAM slot cap rejects a fifth TonPool`() {
+    val factory = factoryWithCounters(0, MAX_TON_POOLS as uint32, 0);
+    val user = testing.treasury("gram-slot-cap-user");
     expect(
-        factory.deploy(testing.treasury("mixed-cap-ton-deployer").address, { value: ton("1") }),
+        factory.deploy(testing.treasury("gram-slot-cap-deployer").address, { value: ton("1") }),
     ).toHaveSuccessfulDeploy({ to: factory.address });
-    setFactoryBalance(factory, factoryRentBudgetForTest(MAX_FACTORY_POOLS));
+    setFactoryBalance(factory, factoryRentBudgetForTest(MAX_TON_POOLS));
 
     val result = factory.sendCreateTonPool(
         user.address,
@@ -1887,7 +2015,7 @@ get fun `test mixed counters at combined cap reject TON create`() {
         to: factory.address,
         exitCode: Errors.FactoryCapacityReached,
     });
-    expect(factory.totalPoolCount()).toEqual(MAX_FACTORY_POOLS);
+    expect(factory.tonPoolCount()).toEqual(MAX_TON_POOLS);
 }
 
 get fun `test exact in-flight cap rejects TON create`() {
@@ -1912,154 +2040,109 @@ get fun `test exact in-flight cap rejects TON create`() {
     expect(factory.inFlightCreateCount()).toEqual(MAX_IN_FLIGHT_CREATES);
 }
 
-fun factoryWithMaximumInflight(
-    confirmedPool: address,
-    creator: address,
-    jettonMaster: address,
-    denomination: coins,
-): Factory {
-    var poolRegistry: map<uint256, address> = [];
-    var poolAddressToKey: map<address, uint256> = [];
-    var poolAddressToCreator: map<address, address> = [];
-
-    val confirmedKey = testJettonRegistryKey(jettonMaster, denomination);
-    poolRegistry.set(confirmedKey, confirmedPool);
-    poolAddressToKey.set(confirmedPool, confirmedKey);
-    poolAddressToCreator.set(confirmedPool, creator);
-
-    var i = 1;
-    while (i < MAX_IN_FLIGHT_CREATES) {
-        val key = i as uint256;
-        val poolAddress = address.fromWorkchainAndHash(0, 0x10000 + i);
-        poolRegistry.set(key, poolAddress);
-        poolAddressToKey.set(poolAddress, key);
-        poolAddressToCreator.set(poolAddress, creator);
-        i += 1;
-    }
-
-    return Factory.fromStorage({
-        codes: factoryCodesForTest(),
-        poolCount: MAX_IN_FLIGHT_CREATES as uint32,
-        tonPoolCount: 0,
-        inFlightCreates: MAX_IN_FLIGHT_CREATES as uint16,
-        registries: (Registries {
-            poolRegistry,
-            poolAddressToKey,
-            tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
-        }).toCell(),
-        createSenders: (CreateSenders {
-            poolAddressToCreator,
-            tonPoolAddressToCreator: [],
-        }).toCell(),
-    });
-}
-
-get fun `test permissionless confirmation frees an in-flight slot for another create`() {
-    val pool = testing.treasury("slot-release-pool");
-    val creator = testing.treasury("slot-release-creator");
-    val user = testing.treasury("slot-release-user");
-    val jettonMaster = testing.treasury("slot-release-master").address;
-    val denomination: coins = 100;
-    val factory = factoryWithMaximumInflight(
-        pool.address,
-        creator.address,
-        jettonMaster,
-        denomination,
-    );
+get fun `test exact in-flight cap rejects Jetton create`() {
+    val factory = factoryWithCounters(0, 0, MAX_IN_FLIGHT_CREATES as uint16);
+    val user = testing.treasury("jetton-inflight-cap-user");
     expect(
-        factory.deploy(testing.treasury("slot-release-deployer").address, { value: ton("4") }),
-    ).toHaveSuccessfulDeploy({ to: factory.address });
-    expect(factory.inFlightCreateCount()).toEqual(MAX_IN_FLIGHT_CREATES);
-
-    expect(
-        factory.sendCreatePool(
-            user.address,
-            1,
-            testing.treasury("blocked-master").address,
-            100,
+        factory.deploy(
+            testing.treasury("jetton-inflight-cap-deployer").address,
             { value: ton("1") },
         ),
-    ).toHaveFailedTx({
+    ).toHaveSuccessfulDeploy({ to: factory.address });
+    setFactoryBalance(factory, factoryRentBudgetForTest(0));
+
+    val result = factory.sendCreatePool(
+        user.address,
+        1,
+        testing.treasury("jetton-inflight-cap-master").address,
+        100,
+        { value: MIN_CREATE_JETTON_POOL_FEE },
+    );
+    expect(result).toHaveFailedTx({
         from: user.address,
         to: factory.address,
         exitCode: Errors.TooManyInFlightCreates,
     });
+    expect(factory.inFlightCreateCount()).toEqual(MAX_IN_FLIGHT_CREATES);
+}
 
-    // Any account may fund the pool-side trigger; Factory trusts only the
-    // resulting callback sender. Here we inject that authenticated callback.
+get fun `test full Jetton allocation cannot block a GRAM Pool`() {
+    val user = testing.treasury("slot-release-user");
+    val factory = factoryWithCounters(
+        MAX_JETTON_POOLS as uint32,
+        0,
+        MAX_JETTON_POOLS as uint16,
+    );
     expect(
-        factory.sendPoolDeployConfirmed(
-            pool.address,
-            2,
-            jettonMaster,
-            denomination,
-            { value: ton("0.05") },
-        ),
-    ).toHaveSuccessfulTx({ from: pool.address, to: factory.address });
-    expect(factory.inFlightCreateCount()).toEqual(MAX_IN_FLIGHT_CREATES - 1);
+        factory.deploy(testing.treasury("slot-release-deployer").address, { value: ton("1") }),
+    ).toHaveSuccessfulDeploy({ to: factory.address });
+    setFactoryBalance(factory, factoryRentBudgetForTest(MAX_JETTON_POOLS));
 
-    val accepted = factory.sendCreatePool(
+    val accepted = factory.sendCreateTonPool(
         user.address,
-        3,
-        testing.treasury("released-master").address,
-        100,
-        { value: ton("1") },
+        1,
+        TON_POOL_DENOM_10,
+        { value: MIN_CREATE_TON_POOL_FEE },
     );
     expect(accepted).toHaveSuccessfulTx({ from: user.address, to: factory.address });
-    expect(factory.totalPoolCount()).toEqual(MAX_IN_FLIGHT_CREATES + 1);
+    expect(factory.poolCount()).toEqual(MAX_JETTON_POOLS);
+    expect(factory.tonPoolCount()).toEqual(1);
+    expect(factory.totalPoolCount()).toEqual(MAX_JETTON_POOLS + 1);
 }
 
 fun maximumFactoryStateForSizeGate(): FactoryStorage {
-    var poolRegistry: map<uint256, address> = [];
-    var poolAddressToKey: map<address, uint256> = [];
     var poolAddressToCreator: map<address, address> = [];
+    var tonPoolAddressToCreator: map<address, address> = [];
 
     var i = 0;
-    while (i < MAX_FACTORY_POOLS) {
-        val key = beginCell().storeUint(0x464b4559, 32).storeUint(i, 32).endCell().hash();
+    while (i < MAX_JETTON_POOLS) {
         val poolAddress = address.fromWorkchainAndHash(
             0,
             beginCell().storeUint(0x46504f4f, 32).storeUint(i, 32).endCell().hash(),
         );
-        poolRegistry.set(key, poolAddress);
-        if (i < MAX_IN_FLIGHT_CREATES) {
-            val creator = address.fromWorkchainAndHash(
-                0,
-                beginCell().storeUint(0x46435254, 32).storeUint(i, 32).endCell().hash(),
-            );
-            poolAddressToKey.set(poolAddress, key);
-            poolAddressToCreator.set(poolAddress, creator);
-        }
+        val creator = address.fromWorkchainAndHash(
+            0,
+            beginCell().storeUint(0x46435254, 32).storeUint(i, 32).endCell().hash(),
+        );
+        poolAddressToCreator.set(poolAddress, creator);
+        i += 1;
+    }
+
+    i = 0;
+    while (i < MAX_TON_POOLS) {
+        val poolAddress = address.fromWorkchainAndHash(
+            0,
+            beginCell().storeUint(0x54504f4f, 32).storeUint(i, 32).endCell().hash(),
+        );
+        val creator = address.fromWorkchainAndHash(
+            0,
+            beginCell().storeUint(0x54435254, 32).storeUint(i, 32).endCell().hash(),
+        );
+        tonPoolAddressToCreator.set(poolAddress, creator);
         i += 1;
     }
 
     return {
         codes: factoryCodesForTest(),
-        poolCount: MAX_FACTORY_POOLS as uint32,
-        tonPoolCount: 0,
-        inFlightCreates: MAX_IN_FLIGHT_CREATES as uint16,
+        poolCount: MAX_JETTON_POOLS as uint32,
+        tonPoolCount: MAX_TON_POOLS as uint32,
+        inFlightCreates: MAX_FACTORY_POOLS as uint16,
         registries: (Registries {
-            poolRegistry,
-            poolAddressToKey,
+            poolRegistry: [],
             tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
         }).toCell(),
-        createSenders: (CreateSenders {
-            poolAddressToCreator,
-            tonPoolAddressToCreator: [],
-        }).toCell(),
+        createSenders: (CreateSenders { poolAddressToCreator, tonPoolAddressToCreator }).toCell(),
     };
 }
 
-get fun `test maximum factory state remains below sixteen thousand cells`() {
+get fun `test maximum Factory state remains below fifty thousand cells`() {
     val maximumState = (ContractState {
         code: build("Factory"),
         data: maximumFactoryStateForSizeGate().toCell(),
     }).toCell();
-    val (cells, _, _, complete) = maximumState.calculateSize(16384);
+    val (cells, _, _, complete) = maximumState.calculateSize(MAX_FACTORY_STATE_CELLS);
     expect(complete).toEqual(true);
-    expect(cells! < 16384).toEqual(true);
+    expect(cells! < MAX_FACTORY_STATE_CELLS).toEqual(true);
     println("factory max-state cells: {}", cells!);
 }
 
@@ -2071,9 +2154,7 @@ fun emptyFactoryStorageForRent(): FactoryStorage {
         inFlightCreates: 0,
         registries: (Registries {
             poolRegistry: [],
-            poolAddressToKey: [],
             tonPoolRegistry: [],
-            tonPoolAddressToKey: [],
         }).toCell(),
         createSenders: (CreateSenders {
             poolAddressToCreator: [],

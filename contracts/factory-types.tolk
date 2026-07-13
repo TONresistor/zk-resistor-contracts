@@ -4,14 +4,19 @@ import "deployment-types"
 // FACTORY STORAGE
 // ============================================================================
 //
-// The factory has no admin. Forward maps are permanent enumeration indexes;
-// reverse and creator maps exist only while a deploy is in flight. A pool
-// authenticates its activation with PoolDeployConfirmed, after which the
-// transient entries are deleted. Sub-cells keep FactoryStorage below the
-// 1023-bit / 4-ref main-cell limit.
+// The factory has no admin. Active registries and pending creator maps are
+// disjoint: every accepted identity occupies exactly one dictionary entry.
+// A pool authenticates its activation with PoolDeployConfirmed, which moves
+// that identity from pending to active without changing the total slot count.
 
-const MAX_FACTORY_POOLS: int = 4096
-const MAX_IN_FLIGHT_CREATES: int = 128
+// The measured worst-case state is 49,342 cells at this capacity, below the
+// basechain account-state limit of 65,536 cells with roughly 25% headroom.
+const MAX_FACTORY_POOLS: int = 24576
+const MAX_TON_POOLS: int = 4
+const MAX_JETTON_POOLS: int = MAX_FACTORY_POOLS - MAX_TON_POOLS
+// Compatibility getter bound. Total capacity already enforces this value, so
+// pending deployments can no longer block creation before the registry is full.
+const MAX_IN_FLIGHT_CREATES: int = MAX_FACTORY_POOLS
 
 // Keep both deployable code cells in one address-determining bundle.
 struct FactoryCodes {
@@ -20,19 +25,17 @@ struct FactoryCodes {
 }
 
 struct Registries {
-    poolRegistry: map<uint256, address>        // hash(jettonMaster, denom) -> jetton pool addr
-    poolAddressToKey: map<address, uint256>    // jetton pool addr -> registry key
-    tonPoolRegistry: map<uint256, address>     // hash(denom) -> TonPool addr
-    tonPoolAddressToKey: map<address, uint256> // TonPool addr -> registry key
+    poolRegistry: map<uint256, address>    // active hash(jettonMaster, denom) -> Pool
+    tonPoolRegistry: map<uint256, address> // active hash(denom) -> TonPool
 }
 
 struct CreateSenders {
-    poolAddressToCreator: map<address, address>    // jetton pool addr -> create sender
-    tonPoolAddressToCreator: map<address, address> // TON pool addr -> create sender
+    poolAddressToCreator: map<address, address>    // pending Pool -> create sender
+    tonPoolAddressToCreator: map<address, address> // pending TonPool -> create sender
 }
 
 struct FactoryStorage {
-    // vNext deployment-only layout. Legacy Factory data is intentionally not
+    // Deployment-only layout. Legacy Factory data is intentionally not
     // decoded or migrated in place; changing these fields changes the address.
     codes: Cell<FactoryCodes>
     poolCount: uint32

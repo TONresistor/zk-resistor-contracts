@@ -95,23 +95,25 @@ Anyone may create:
 - a Jetton Pool for any positive `(jettonMaster, denomination)` pair;
 - a TonPool for `10`, `100`, `1,000`, or `10,000` TON.
 
-The Factory permits at most 4,096 registered Pools and 128 concurrent,
-unconfirmed creations.
+The Factory accepts at most 24,572 Jetton Pools and four TonPools. Active and
+pending entries share those same 24,576 slots; there is no smaller independent
+in-flight limit.
 
 Creation follows this sequence:
 
-1. Factory derives the deterministic Pool address and records the request.
+1. Factory derives the deterministic Pool address and records it as pending.
 2. Factory forwards only value from the current create message.
 3. TonPool confirms deployment directly.
 4. Pool queries its immutable Jetton master through TEP-89.
 5. Only the master may bind the Pool's Jetton wallet.
 6. The activated Pool confirms its identity back to Factory.
-7. Factory authenticates the sender and removes transient creation state.
+7. Factory authenticates the sender and atomically moves the entry to the
+   active registry.
 
 `FactoryPoolCreatedEvent` records an accepted request, not final activation.
-Clients must use the registry and pending getters as canonical state. An
-authenticated deployment bounce removes the failed registry entry and returns
-the remaining create-message value to its sender.
+Clients must combine the address and pending getters and present a Pool only
+after activation. An authenticated deployment bounce removes the pending entry,
+releases its slot, and returns the remaining create-message value to its sender.
 
 ## 5. Deposits
 
@@ -216,9 +218,9 @@ Jetton Wallet hops. The unused part of that outer headroom is returned to the
 user through the standard TEP-74 excess path; it is not a `0.65 TON` protocol
 fee.
 
-Factory reserves `0.37 TON` plus `0.02 TON` per registered Pool and retains
-`0.04 TON` from each create message for the new registry entry and actions. It
-forwards all other value from that message (`0.41 TON` at the minimum fee).
+Factory reserves `0.37 TON` plus `0.02 TON` per accepted active or pending Pool
+and retains `0.04 TON` from each create message for the new entry and actions.
+It forwards all other value from that message (`0.41 TON` at the minimum fee).
 Historical Factory funds never subsidize a new creator.
 
 Pool rent runway is progressive:
@@ -300,8 +302,8 @@ and tree depth.
 - Losing the note loses withdrawal capability.
 - A stale provider may delay a user until it resynchronizes, but cannot create a
   valid false state transition.
-- Jetton custody failures are local to Pools for that asset. Activation liveness
-  is global: pending creations have no timeout or cancellation path, and 128
-  unresolved activations exhaust the Factory's in-flight cap and block further
-  Jetton and TON Pool creation.
+- Jetton custody failures are local to Pools for that asset. A non-responsive
+  Jetton master can leave its own creation pending. That request consumes one
+  of the 24,572 Jetton slots, but it cannot consume any of the four reserved
+  TonPool slots or block the Factory through a smaller in-flight cap.
 - Contract immutability means protocol changes require new deployments.

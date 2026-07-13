@@ -27,11 +27,12 @@ One deployment per network. Spawns pools on demand; both operations are permissi
 | `0xa0c0c0c2` | CreateTonPool | 0.45 TON |
 
 `FactoryPoolCreatedEvent` (`0x00c0c0c0`) indexes accepted create requests; it is
-not an activation receipt. A later deploy bounce remains in history but removes
-the registry entry. The registry getters are canonical, `poolDeploymentPending`
-distinguishes in-flight children, and `expectedPoolAddress` derives a future
-pool address. The permanent registry is capped at 4,096 pools and transient
-creates at 128.
+not an activation receipt. A later deploy bounce remains in history but releases
+the pending slot. The address getters return accepted active or pending Pools;
+`poolDeploymentPending` distinguishes them and `expectedPoolAddress` derives a
+future Pool address. Capacity is 24,572 Jetton Pools plus four TonPools. Active
+and pending entries share those same 24,576 slots, so there is no smaller global
+in-flight limit that Jetton activation failures can exhaust.
 
 ### `Pool`
 
@@ -152,7 +153,7 @@ the BLS12-381 Fr field.
 
 | Contract | Code hash |
 |---|---|
-| Factory | `199ab5112f96f7f390522f9b8c5df5429f3f3e037409b8bfad7648b954f2ec8f` |
+| Factory | `c2c1ffadb3c46ebba1fc9b184a384590b057a8a3d19eb9edd3dfc86ed5983f36` |
 | Pool | `51cd5b3ec01beb28a843d30ecf60ea998d1107342a214969ae72047f1eb82dec` |
 | TonPool | `fde119db0060a01c0a00adc307ec98a2bf5b734ca7ef45e886c9ca2cce642aa3` |
 
@@ -179,6 +180,9 @@ Committed VK JSON hashes:
 | `circuits/vk/withdraw_vk.json` | `54eaba78d2b47bd01aaeaa3a2a687565e1e641ba7d87e8e9eb4385e3d377c3e6` |
 
 ### Mainnet deployments
+
+The table below documents the currently deployed `2.0.0` Factory. This `2.0.1`
+branch changes only Factory bytecode and therefore requires a new address.
 
 The production sources are frozen at commit
 [`c46b679`](https://github.com/TONresistor/zk-resistor-contracts/commit/c46b67997804d6cbaaeaa8e03813a4dd776b1422)
