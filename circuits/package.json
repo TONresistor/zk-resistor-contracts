@@ -41,6 +41,11 @@
       "insert": 25105,
       "withdraw": 14537,
       "hasher": 624
+    },
+    "r1cs_sha256": {
+      "insert": "614ade50a78c65a47cdc578204e9e89acb124b2c892262a027cc22b8299ffe07",
+      "withdraw": "aa7017d9ca01aab59b31e22e193e0754bc5eefe4871ffe51ab5abae560c80f35",
+      "hasher": "c270aa22727831dc3aab63b1f24b9422c4fbfb900b1524d47178db44591b91fb"
     }
   }
 }

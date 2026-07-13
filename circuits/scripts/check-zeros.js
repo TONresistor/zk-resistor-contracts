@@ -3,10 +3,10 @@
 // and diff against the values hardcoded in `lib/merkle_tree.circom`. Any
 // drift between the script and the circuit fails the build.
 //
-// Also asserts that `ZEROS[19]` equals the `EMPTY_TREE_ROOT` constant in
-// `contracts/constants.tolk`, i.e. the empty depth-20 root the on-chain
-// pool initializes with on deploy. Drift here would mean the very first
-// deposit's insertion proof cannot verify against the pool's current root.
+// Also asserts that Poseidon(`ZEROS[19]`, `ZEROS[19]`) equals the
+// `EMPTY_TREE_ROOT` constant in `contracts/constants.tolk`, i.e. the empty
+// depth-20 root the on-chain pool initializes with on deploy. Drift here would
+// mean the first deposit's insertion proof cannot verify against that root.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

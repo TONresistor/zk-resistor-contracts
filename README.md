@@ -172,6 +172,13 @@ Final ceremony zkey hashes:
 | insert | `5ef0a354249e224dc52d72bd332391503d0a63878fb6b1485ca729e040ae59ef` |
 | withdraw | `60b22adfc56e3c8268484213ea34cb29492645decc41bd0d5632762de39949ff` |
 
+Pinned ceremony R1CS hashes:
+
+| Circuit | SHA-256 |
+|---|---|
+| insert | `614ade50a78c65a47cdc578204e9e89acb124b2c892262a027cc22b8299ffe07` |
+| withdraw | `aa7017d9ca01aab59b31e22e193e0754bc5eefe4871ffe51ab5abae560c80f35` |
+
 Committed VK JSON hashes:
 
 | Circuit | SHA-256 |

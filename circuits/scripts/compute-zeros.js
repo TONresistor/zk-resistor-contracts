@@ -13,8 +13,8 @@
 // `check-zeros.js` reruns this script and diffs the output against the
 // hardcoded values, so any drift between the script and the circuit fails CI.
 //
-// `ZEROS[19]` MUST equal `EMPTY_TREE_ROOT` in `contracts/constants.tolk`.
-// The CI gate enforces that too.
+// Poseidon(`ZEROS[19]`, `ZEROS[19]`) MUST equal `EMPTY_TREE_ROOT` in
+// `contracts/constants.tolk`. The CI gate enforces that too.
 
 import { poseidon2 } from "./poseidon-bls.js";
 

@@ -43,8 +43,8 @@ fun onInternalMessage(in: InMessage) {
         else => {
             // Empty body accepted as factory's deploy message (init surplus)
             // or a passive top-up. The TON stays on the pool as a storage-rent
-            // buffer above POOL_TON_RESERVE + earmarks. Withdraw reserves the
-            // complete pre-message balance, so later callers cannot sweep it.
+            // buffer above its progressive runway and obligations. Withdraw
+            // reserves the complete pre-message balance, so callers cannot sweep it.
             assert (in.body.isEmpty()) throw Errors.InvalidMessage;
         }
     }

@@ -27,8 +27,8 @@ const ROOT_HISTORY_SIZE: int = 100
 
 // Minimum incoming value required to process a withdraw. Covers the hard
 // outflow (jetton transfer + compute + event forwarding) with ~0.03 TON
-// margin. The handler reserves POOL_TON_RESERVE + earmarks and sends the
-// rest back to the broadcaster.
+// margin. The handler preserves the progressive rent runway plus every
+// outstanding obligation and sends the rest back to the broadcaster.
 const MIN_WITHDRAW_GAS: coins = 100000000 // 0.10 TON
 
 // Factory base runway: more than twice the measured ten-year storage cost of

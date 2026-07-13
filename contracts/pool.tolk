@@ -45,9 +45,9 @@ fun onInternalMessage(in: InMessage) {
         }
         else => {
             // Empty body accepted as passive top-up / donation. The TON stays
-            // on the pool as a storage-rent buffer above POOL_TON_RESERVE +
-            // earmarks. The withdraw carry path reserves the complete pre-message
-            // balance, so later callers cannot sweep this buffer.
+            // on the pool as a storage-rent buffer above its progressive runway
+            // and earmarks. The withdraw carry path reserves the complete
+            // pre-message balance, so later callers cannot sweep this buffer.
             assert (in.body.isEmpty()) throw Errors.InvalidMessage;
         }
     }

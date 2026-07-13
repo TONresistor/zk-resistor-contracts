@@ -72,5 +72,5 @@ jobs:
       - name: Canonical ZEROS[] integrity (EMPTY_TREE_ROOT gate)
         run: npm run check:zeros
 
-      - name: Constraint count baseline
+      - name: Exact R1CS release pins
         run: npm run check:constraints

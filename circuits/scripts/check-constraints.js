@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Verifies R1CS constraint counts stay within tolerance of the pinned
-// baseline. A regression here means someone changed a circuit without
-// updating the baseline; review carefully before merging.
+// Verifies exact R1CS constraint counts and hashes. Insert/withdraw hashes pin
+// compilation to the R1CS used by the finalized ceremony.
 
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const baseline = pkg.config.constraint_baseline;
-const TOLERANCE = 0.05; // ±5%
+const expectedHashes = pkg.config.r1cs_sha256;
 
 const TARGETS = ["insert", "withdraw", "hasher"];
 let failed = false;
@@ -38,22 +38,27 @@ for (const name of TARGETS) {
   }
   const actual = parseInt(m[1], 10);
   const expected = baseline[name];
-  const lo = Math.floor(expected * (1 - TOLERANCE));
-  const hi = Math.ceil(expected * (1 + TOLERANCE));
-  if (actual < lo || actual > hi) {
-    console.error(
-      `  ✗ ${name}: ${actual} constraints, baseline ${expected} (tolerance ±${(TOLERANCE * 100).toFixed(0)}% = [${lo}, ${hi}])`,
-    );
+  if (actual !== expected) {
+    console.error(`  ✗ ${name}: ${actual} constraints, expected exactly ${expected}`);
     failed = true;
-  } else {
-    console.log(`  ✓ ${name}: ${actual} constraints (baseline ${expected})`);
+  }
+
+  const actualHash = createHash("sha256").update(readFileSync(r1csPath)).digest("hex");
+  const expectedHash = expectedHashes[name];
+  if (actualHash !== expectedHash) {
+    console.error(`  ✗ ${name}: R1CS SHA-256 ${actualHash}, expected ${expectedHash}`);
+    failed = true;
+  }
+
+  if (actual === expected && actualHash === expectedHash) {
+    console.log(`  ✓ ${name}: ${actual} constraints, SHA-256 ${actualHash}`);
   }
 }
 
 if (failed) {
   console.error(
-    "\nIf the change is intentional, update `config.constraint_baseline` in circuits/package.json.",
+    "\nReview any intentional artifact change before updating the pins; changing insert or withdraw requires a new trusted setup.",
   );
   process.exit(1);
 }
-console.log("\nAll circuit constraint counts within tolerance.");
+console.log("\nAll R1CS artifacts match their exact release pins.");
