@@ -222,6 +222,53 @@ get fun `test createPool fails on duplicate (jetton, denom)`() {
     });
 }
 
+get fun `test createPool rejects a duplicate after activation`() {
+    val (factory, _, user) = setupDeployedFactory();
+    val jettonMaster = testing.treasury("active-duplicate-master").address;
+    val denomination: coins = 100;
+    val poolAddress = factory.expectedPoolAddress(jettonMaster, denomination);
+
+    expect(
+        factory.sendCreatePool(
+            user.address,
+            1,
+            jettonMaster,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveSuccessfulTx({ from: user.address, to: factory.address });
+    expect(
+        factory.sendPoolDeployConfirmed(
+            poolAddress,
+            2,
+            jettonMaster,
+            denomination,
+            { value: ton("0.02") },
+        ),
+    ).toHaveSuccessfulTx({ from: poolAddress, to: factory.address });
+
+    expect(factory.poolCount()).toEqual(1);
+    expect(factory.inFlightCreateCount()).toEqual(0);
+    expect(factory.poolAddressFor(jettonMaster, denomination)).toEqual(poolAddress);
+
+    expect(
+        factory.sendCreatePool(
+            user.address,
+            3,
+            jettonMaster,
+            denomination,
+            { value: MIN_CREATE_JETTON_POOL_FEE },
+        ),
+    ).toHaveFailedTx({
+        from: user.address,
+        to: factory.address,
+        exitCode: Errors.PoolAlreadyExists,
+    });
+    expect(factory.poolCount()).toEqual(1);
+    expect(factory.inFlightCreateCount()).toEqual(0);
+    expect(factory.pendingCreateSender(poolAddress)).toEqual(null);
+}
+
 get fun `test two different Jetton Pools can remain pending concurrently`() {
     val (factory, _, user) = setupDeployedFactory();
     val masterA = testing.treasury("concurrent-master-a").address;

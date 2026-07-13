@@ -1,5 +1,6 @@
 import "@stdlib/exotic-cells"
 import "@acton/testing/expect"
+import "@acton/testing/fuzz"
 import "@contracts/constants"
 import "@contracts/sparse-set"
 import "sparse-set-helpers"
@@ -243,6 +244,32 @@ get fun `test sparse set rejects unknown domain and key outside scalar field`() 
     expect(bit255.status).toEqual(SparseSetUpdateStatus.InvalidKey);
 }
 
+@test.fuzz(256)
+get fun `test fuzz sparse set accepts every canonical scalar on an empty bucket`(rawKey: uint256) {
+    val key = fuzz.bound(rawKey, 0, BLS12_381_R - 1);
+    val update = sparseSetApplyUpdate(
+        SPARSE_SET_COMMITMENT_DOMAIN,
+        key,
+        0,
+        emptySparseProof(),
+    );
+    expect(update.status).toEqual(SparseSetUpdateStatus.Ok);
+    expect(update.bucketId).toEqual(sparseSetBucketId(key));
+}
+
+@test.fuzz(256)
+get fun `test fuzz sparse set rejects every scalar field alias`(rawKey: uint256) {
+    val maxUint256 = ((1 << 255) - 1) | (1 << 255);
+    val key = fuzz.bound(rawKey, BLS12_381_R, maxUint256);
+    val update = sparseSetApplyUpdate(
+        SPARSE_SET_NULLIFIER_DOMAIN,
+        key,
+        0,
+        emptySparseProof(),
+    );
+    expect(update.status).toEqual(SparseSetUpdateStatus.InvalidKey);
+}
+
 get fun `test sparse set rejects stale root before walking witness chain`() {
     // The sibling chain is malformed, but stale-root detection is deliberately
     // first so concurrent callers can regenerate cheaply.
@@ -342,6 +369,62 @@ get fun `test sparse set rejects noncanonical sibling cells`() {
         expect(result.status).toEqual(SparseSetUpdateStatus.MalformedProof);
         i += 1;
     }
+}
+
+get fun `test sparse set accepts a terminal chunk with exactly three siblings`() {
+    val key: uint256 = 42;
+    val siblings: array<uint256> = [3, 5, 7];
+    var oldRoot: uint256 = 0;
+    var path = sparseSetPath(key);
+    var level = 0;
+    while (level < SPARSE_SET_DEPTH) {
+        val sibling: uint256 = level < siblings.size() ? siblings.get(level) : 0;
+        oldRoot = (path & 1) == 0
+            ? sparseSetNodeHash(SPARSE_SET_NULLIFIER_DOMAIN, level as uint8, oldRoot, sibling)
+            : sparseSetNodeHash(SPARSE_SET_NULLIFIER_DOMAIN, level as uint8, sibling, oldRoot);
+        path >>= 1;
+        level += 1;
+    }
+
+    val update = sparseSetApplyUpdate(
+        SPARSE_SET_NULLIFIER_DOMAIN,
+        key,
+        oldRoot,
+        sparseProofCell(oldRoot, 7, sparseSetPackTestSiblings(siblings)),
+    );
+    expect(update.status).toEqual(SparseSetUpdateStatus.Ok);
+}
+
+get fun `test sparse set rejects an exotic continuation chunk`() {
+    val siblingChain = beginCell()
+        .storeUint(3, 256)
+        .storeUint(5, 256)
+        .storeUint(7, 256)
+        .storeRef(createEmptyCell().toLibraryReference())
+        .endCell();
+    val update = sparseSetApplyUpdate(
+        SPARSE_SET_COMMITMENT_DOMAIN,
+        1,
+        0,
+        sparseProofCell(0, 15, siblingChain),
+    );
+    expect(update.status).toEqual(SparseSetUpdateStatus.MalformedProof);
+}
+
+get fun `test sparse set rejects a trailing continuation reference`() {
+    val siblingChain = beginCell()
+        .storeUint(3, 256)
+        .storeUint(5, 256)
+        .storeUint(7, 256)
+        .storeRef(beginCell().storeUint(11, 256).endCell())
+        .endCell();
+    val update = sparseSetApplyUpdate(
+        SPARSE_SET_COMMITMENT_DOMAIN,
+        1,
+        0,
+        sparseProofCell(0, 7, siblingChain),
+    );
+    expect(update.status).toEqual(SparseSetUpdateStatus.MalformedProof);
 }
 
 get fun `test sparse set dense 247-sibling proof has canonical maximum shape`() {

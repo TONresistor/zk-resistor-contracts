@@ -188,26 +188,18 @@ Committed VK JSON hashes:
 
 ### Mainnet deployments
 
-The table below documents the currently deployed `2.0.0` Factory. This `2.0.1`
-branch changes only Factory bytecode, requires a new address, and builds with
-Acton 1.1.0 / Tolk 1.4.1.
-
-The production sources are frozen at commit
-[`c46b679`](https://github.com/TONresistor/zk-resistor-contracts/commit/c46b67997804d6cbaaeaa8e03813a4dd776b1422)
-and reproduce the deployed bytecode with Acton 1.0.0 and Tolk 1.4.0.
+The canonical Factory is deployed from this `2.0.1` release, built with Acton
+1.1.0 and Tolk 1.4.1.
 
 | Contract | Mainnet address or anchor | Verified source |
 |---|---|---|
-| Factory | [`EQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBjle`](https://tonviewer.com/EQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBjle) | [TON Verifier](https://verifier.ton.org/UQD3rhFaCusU0715MZonDNj8GuHeA17KygIXkBLkalpkBmSb) |
+| Factory | [`EQB8W1W276GWiQpK88Sx46K20rsMrCKIezOpwFGJ4dhjWz58`](https://tonviewer.com/EQB8W1W276GWiQpK88Sx46K20rsMrCKIezOpwFGJ4dhjWz58) | [TON Verifier](https://verifier.ton.org/UQB8W1W276GWiQpK88Sx46K20rsMrCKIezOpwFGJ4dhjW2O5) |
 | Pool | Code-hash anchor [`EQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SGSv`](https://tonviewer.com/EQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SGSv) | [TON Verifier](https://verifier.ton.org/UQDalKF576pLt4xO0QFxQyfk8w7juYpw99970753nyu8SDlq) |
 | TonPool | Code-hash anchor [`EQA4dH1RqyFsROwfRF-7rwUT8676lW6DkJkW484pIYA7wiIe`](https://tonviewer.com/EQA4dH1RqyFsROwfRF-7rwUT8676lW6DkJkW484pIYA7wiIe) | [TON Verifier](https://verifier.ton.org/UQA4dH1RqyFsROwfRF-7rwUT8676lW6DkJkW484pIYA7wn_b) |
 
-TON Verifier binds sources to a runtime code hash. The Pool address above is
-only the deployed anchor for the shared Pool code; its asset and state are not
-part of source verification.
-
-The Factory currently registers two TonPool instances, for fixed denominations
-of 10 and 100 native units. They share the verified TonPool code hash above.
+TON Verifier binds sources to a runtime code hash. The Pool and TonPool
+addresses above are deployed anchors for their shared code; their assets and
+state are not part of source verification.
 
 - Production frontend: [zk.resistance.dog](https://zk.resistance.dog)
 - Historical frontend: [zk.resistance.dog/old/](https://zk.resistance.dog/old/)
