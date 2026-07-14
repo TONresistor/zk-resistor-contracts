@@ -6,8 +6,13 @@ on:
       - dev
       - main
       - master
+    tags:
+      - "v*"
     paths:
       - "circuits/**"
+      - "contracts/verifier-insert-vk.tolk"
+      - "contracts/verifier-withdraw-vk.tolk"
+      - "scripts/ci/check-ceremony-chain.sh"
       - ".github/workflows/circuits.yml"
   pull_request:
     branches:
@@ -16,6 +21,9 @@ on:
       - master
     paths:
       - "circuits/**"
+      - "contracts/verifier-insert-vk.tolk"
+      - "contracts/verifier-withdraw-vk.tolk"
+      - "scripts/ci/check-ceremony-chain.sh"
       - ".github/workflows/circuits.yml"
   workflow_dispatch:
 
@@ -29,7 +37,7 @@ jobs:
   compile-and-check:
     name: Compile + constraint baseline + toolchain pin
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     permissions:
       contents: read
@@ -43,6 +51,26 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Checkout pinned ceremony artifacts
+        env:
+          CEREMONY_COMMIT: 2a300cd303edb70e86f9663140174eba7c21d87d
+          CEREMONY_REPOSITORY: https://github.com/TONresistor/zk-resistor-ceremony.git
+        run: |
+          set -euo pipefail
+          ceremony_dir="$RUNNER_TEMP/zkresistor-ceremony"
+          git init "$ceremony_dir"
+          git -C "$ceremony_dir" remote add origin "$CEREMONY_REPOSITORY"
+          git -C "$ceremony_dir" sparse-checkout init --no-cone
+          git -C "$ceremony_dir" sparse-checkout set --no-cone \
+            transcript/contributions.json \
+            circuits/insert.r1cs \
+            circuits/withdraw.r1cs \
+            phase1/pot_0024_drand-beacon.ptau \
+            phase2/insert_0013_drand-beacon.zkey \
+            phase2/withdraw_0013_drand-beacon.zkey
+          git -C "$ceremony_dir" fetch --depth=1 --filter=blob:none origin "$CEREMONY_COMMIT"
+          git -C "$ceremony_dir" checkout --detach FETCH_HEAD
 
       - name: Setup Node
         uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
@@ -74,3 +102,6 @@ jobs:
 
       - name: Exact R1CS release pins
         run: npm run check:constraints
+
+      - name: Ceremony release chain
+        run: bash ../scripts/ci/check-ceremony-chain.sh "$RUNNER_TEMP/zkresistor-ceremony"
