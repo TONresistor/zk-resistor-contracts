@@ -1,28 +1,44 @@
-# ZKResistor Contracts
+<h1 align="center">ZKResistor Contracts</h1>
 
-Immutable, fixed-denomination privacy pools on TON, written in Tolk. The
-contract and circuit source code in this repository is authoritative.
+<p align="center">
+  <a href="https://ton.org/"><img src="https://img.shields.io/badge/TON-Blockchain-0098EA?style=flat-square&amp;logo=ton&amp;logoColor=white" alt="TON Blockchain"></a>
+  <a href="https://ton-blockchain.github.io/acton/docs/welcome"><img src="https://img.shields.io/badge/Acton-Toolchain-111827?style=flat-square" alt="Acton"></a>
+  <a href="https://docs.ton.org/tolk/overview"><img src="https://img.shields.io/badge/Tolk-Language-2F74C0?style=flat-square" alt="Tolk"></a>
+</p>
+
+<p align="center">
+  ZKResistor is an immutable privacy-pool protocol for TON, written in Tolk.
+  Its permissionless Factory deploys fixed-denomination pools for native TON
+  and TEP-74 Jettons. Each pool records deposit commitments in a Merkle tree
+  and verifies BLS12-381 Groth16 proofs on-chain, enabling recipient-bound
+  withdrawals without revealing which deposit is spent. Nullifiers prevent
+  double-spending; there is no administrator or upgrade path.
+  <br />
+  Built with <a href="https://ton-blockchain.github.io/acton/docs/welcome"><strong>Acton</strong></a>.
+</p>
 
 ## How it works
 
-1. A user generates a private note locally.
-2. The note commitment is deposited into a Pool.
-3. A Groth16 proof authorizes withdrawal without revealing which deposit is
-   being spent.
-4. The Pool records the nullifier and pays the recipient bound to the proof.
+1. **Create or select a Pool.** The permissionless Factory deploys an immutable
+   Pool for one asset and one fixed denomination: native TON or a TEP-74 Jetton.
+2. **Generate a private note.** The secret is created locally and never enters
+   contract state. Only derived values—commitment, nullifier, and proofs—are
+   published.
+3. **Deposit.** The exact denomination is transferred with the commitment and a
+   Groth16 insertion proof. The Pool rejects duplicate commitments, verifies
+   the Merkle-root transition, and reserves `0.30 TON` for the future
+   broadcaster.
+4. **Prove the withdrawal.** The note holder generates a Groth16 proof against
+   a known root. It proves knowledge of a note included in the tree without
+   revealing its source deposit and binds the full recipient address.
+5. **Settle.** Anyone may broadcast the proof. The Pool verifies it on-chain,
+   rejects spent nullifiers, records the nullifier, pays the denomination to
+   the bound recipient, and reimburses the broadcaster.
 
-Anyone may create a Pool, deposit, or broadcast a withdrawal. The contracts
-have no administrator, upgrade path, allowlist, oracle, or off-chain authority.
-
-Each Pool provides:
-
-- `1,048,576` deposit slots at Merkle depth 20;
-- the current Merkle root and 99 previous roots, so recently generated proofs
-  remain usable while new deposits arrive;
-- on-chain Groth16 verification over BLS12-381;
-- bounded commitment and nullifier state;
-- recipient-bound withdrawal proofs;
-- immutable code and identity.
+Each Pool uses a depth-20 Merkle tree with `1,048,576` lifetime deposit slots
+and retains the current root plus 99 previous roots. There is no administrator,
+upgrade, sweep, or recovery path: a lost note or an incorrect proof-bound
+recipient cannot be recovered.
 
 ## Contracts
 
